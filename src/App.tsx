@@ -18,6 +18,7 @@ import MonthlyIncomeExpenses from './pages/MonthlyIncomeExpenses';
 import Tickets from './pages/Tickets';
 import Settings from './pages/Settings';
 import MyAccount from './pages/MyAccount';
+import UserManagement from './pages/UserManagement';
 import { Loader2 } from 'lucide-react';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -219,6 +220,16 @@ function AppRoutes() {
           <PrivateRoute>
             <Layout>
               <MyAccount />
+            </Layout>
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/user-management"
+        element={
+          <PrivateRoute>
+            <Layout>
+              <UserManagement />
             </Layout>
           </PrivateRoute>
         }

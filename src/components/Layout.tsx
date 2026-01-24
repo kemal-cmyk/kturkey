@@ -19,6 +19,7 @@ import {
   Plus,
   Wallet,
   BarChart2,
+  UserCog,
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -49,6 +50,7 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Reports', href: '/reports', icon: FileText, show: true },
     { name: 'Support Tickets', href: '/tickets', icon: Ticket, show: true },
     { name: 'My Account', href: '/my-account', icon: Users, show: isHomeowner },
+    { name: 'User Management', href: '/user-management', icon: UserCog, show: isSuperAdmin },
     { name: 'Settings', href: '/settings', icon: Settings, show: isAdmin },
   ].filter(item => item.show);
 
