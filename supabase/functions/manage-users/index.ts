@@ -94,8 +94,7 @@ Deno.serve(async (req: Request) => {
               user_id,
               role,
               is_active,
-              profiles!inner(full_name),
-              unit_assignments!left(units!inner(id, unit_number))
+              profiles!inner(full_name)
             `)
             .eq('site_id', body.site_id);
 
@@ -117,7 +116,24 @@ Deno.serve(async (req: Request) => {
             authUsers = users || [];
           }
 
+          const { data: ownedUnits } = await adminClient
+            .from('units')
+            .select('id, unit_number, owner_id')
+            .eq('site_id', body.site_id)
+            .in('owner_id', userIds);
+
           const emailMap = new Map(authUsers.map((u: any) => [u.id, u.email]));
+          const unitsMap = new Map<string, any[]>();
+
+          ownedUnits?.forEach((unit: any) => {
+            if (!unitsMap.has(unit.owner_id)) {
+              unitsMap.set(unit.owner_id, []);
+            }
+            unitsMap.get(unit.owner_id)?.push({
+              id: unit.id,
+              unit_number: unit.unit_number,
+            });
+          });
 
           const users = roles?.map((role: any) => ({
             user_id: role.user_id,
@@ -125,10 +141,7 @@ Deno.serve(async (req: Request) => {
             full_name: role.profiles.full_name || '',
             role: role.role,
             is_active: role.is_active,
-            units: role.unit_assignments?.map((ua: any) => ({
-              id: ua.units.id,
-              unit_number: ua.units.unit_number,
-            })) || [],
+            units: unitsMap.get(role.user_id) || [],
           })) || [];
 
           console.log('[manage-users] Listed', users.length, 'users');
@@ -222,14 +235,10 @@ Deno.serve(async (req: Request) => {
 
               if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
                 const { error: unitError } = await adminClient
-                  .from('unit_assignments')
-                  .insert(
-                    body.unit_ids.map(unit_id => ({
-                      user_id: invitedUserId,
-                      unit_id,
-                      site_id: body.site_id,
-                    }))
-                  );
+                  .from('units')
+                  .update({ owner_id: invitedUserId })
+                  .in('id', body.unit_ids)
+                  .eq('site_id', body.site_id);
 
                 if (unitError) {
                   console.error('[manage-users] Unit assignment failed:', unitError.message);
@@ -272,14 +281,10 @@ Deno.serve(async (req: Request) => {
 
         if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
           const { error: unitError } = await adminClient
-            .from('unit_assignments')
-            .insert(
-              body.unit_ids.map(unit_id => ({
-                user_id: invitedUserId,
-                unit_id,
-                site_id: body.site_id,
-              }))
-            );
+            .from('units')
+            .update({ owner_id: invitedUserId })
+            .in('id', body.unit_ids)
+            .eq('site_id', body.site_id);
 
           if (unitError) {
             console.error('[manage-users] Unit assignment failed:', unitError.message);
@@ -314,26 +319,22 @@ Deno.serve(async (req: Request) => {
           throw roleError;
         }
 
-        const { error: deleteError } = await adminClient
-          .from('unit_assignments')
-          .delete()
-          .eq('user_id', body.user_id)
+        const { error: clearError } = await adminClient
+          .from('units')
+          .update({ owner_id: null })
+          .eq('owner_id', body.user_id)
           .eq('site_id', body.site_id);
 
-        if (deleteError) {
-          console.error('[manage-users] Unit cleanup failed:', deleteError.message);
+        if (clearError) {
+          console.error('[manage-users] Unit cleanup failed:', clearError.message);
         }
 
         if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
           const { error: unitError } = await adminClient
-            .from('unit_assignments')
-            .insert(
-              body.unit_ids.map(unit_id => ({
-                user_id: body.user_id,
-                unit_id,
-                site_id: body.site_id,
-              }))
-            );
+            .from('units')
+            .update({ owner_id: body.user_id })
+            .in('id', body.unit_ids)
+            .eq('site_id', body.site_id);
 
           if (unitError) {
             console.error('[manage-users] Unit assignment failed:', unitError.message);
