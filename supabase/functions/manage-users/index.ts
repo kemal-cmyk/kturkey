@@ -71,52 +71,77 @@ Deno.serve(async (req: Request) => {
 
     switch (body.action) {
       case 'list_users': {
-        const { data: roles, error } = await adminClient
-          .from('user_site_roles')
-          .select(`
-            user_id,
-            role,
-            is_active,
-            profiles!inner(full_name),
-            unit_assignments!left(units!inner(id, unit_number))
-          `)
-          .eq('site_id', body.site_id);
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-        if (error) {
-          console.error('[manage-users] List users failed:', error.message);
-          throw error;
+        const response = await fetch(`${supabaseUrl}/rest/v1/rpc/get_site_users`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseServiceKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=representation',
+          },
+          body: JSON.stringify({ p_site_id: body.site_id }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[manage-users] RPC call failed:', response.status, errorText);
+
+          const { data: roles, error } = await adminClient
+            .from('user_site_roles')
+            .select(`
+              user_id,
+              role,
+              is_active,
+              profiles!inner(full_name),
+              unit_assignments!left(units!inner(id, unit_number))
+            `)
+            .eq('site_id', body.site_id);
+
+          if (error) {
+            console.error('[manage-users] List users failed:', error.message);
+            throw error;
+          }
+
+          const userIds = roles?.map((r: any) => r.user_id) || [];
+
+          let authUsers: any[] = [];
+          if (userIds.length > 0) {
+            const { data: users } = await adminClient
+              .schema('auth')
+              .from('users')
+              .select('id,email')
+              .in('id', userIds);
+
+            authUsers = users || [];
+          }
+
+          const emailMap = new Map(authUsers.map((u: any) => [u.id, u.email]));
+
+          const users = roles?.map((role: any) => ({
+            user_id: role.user_id,
+            email: emailMap.get(role.user_id) || 'unknown',
+            full_name: role.profiles.full_name || '',
+            role: role.role,
+            is_active: role.is_active,
+            units: role.unit_assignments?.map((ua: any) => ({
+              id: ua.units.id,
+              unit_number: ua.units.unit_number,
+            })) || [],
+          })) || [];
+
+          console.log('[manage-users] Listed', users.length, 'users');
+          return new Response(
+            JSON.stringify({ users }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
         }
 
-        const userIds = roles?.map((r: any) => r.user_id) || [];
-
-        let authUsers: any[] = [];
-        if (userIds.length > 0) {
-          const { data: users } = await adminClient
-            .schema('auth')
-            .from('users')
-            .select('id,email')
-            .in('id', userIds);
-
-          authUsers = users || [];
-        }
-
-        const emailMap = new Map(authUsers.map((u: any) => [u.id, u.email]));
-
-        const users = roles?.map((role: any) => ({
-          user_id: role.user_id,
-          email: emailMap.get(role.user_id) || 'unknown',
-          full_name: role.profiles.full_name || '',
-          role: role.role,
-          is_active: role.is_active,
-          units: role.unit_assignments?.map((ua: any) => ({
-            id: ua.units.id,
-            unit_number: ua.units.unit_number,
-          })) || [],
-        })) || [];
-
-        console.log('[manage-users] Listed', users.length, 'users');
+        const rpcUsers = await response.json();
+        console.log('[manage-users] Listed', rpcUsers.length, 'users via RPC');
         return new Response(
-          JSON.stringify({ users }),
+          JSON.stringify({ users: rpcUsers }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
