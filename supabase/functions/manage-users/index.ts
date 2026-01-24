@@ -36,8 +36,6 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const token = authHeader.replace('Bearer ', '');
-
     const authClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     });
@@ -79,7 +77,7 @@ Deno.serve(async (req: Request) => {
             user_id,
             role,
             is_active,
-            profiles!inner(email, full_name),
+            profiles!inner(full_name),
             unit_assignments!left(units!inner(id, unit_number))
           `)
           .eq('site_id', body.site_id);
@@ -89,10 +87,25 @@ Deno.serve(async (req: Request) => {
           throw error;
         }
 
+        const userIds = roles?.map((r: any) => r.user_id) || [];
+
+        let authUsers: any[] = [];
+        if (userIds.length > 0) {
+          const { data: users } = await adminClient
+            .schema('auth')
+            .from('users')
+            .select('id,email')
+            .in('id', userIds);
+
+          authUsers = users || [];
+        }
+
+        const emailMap = new Map(authUsers.map((u: any) => [u.id, u.email]));
+
         const users = roles?.map((role: any) => ({
           user_id: role.user_id,
-          email: role.profiles.email,
-          full_name: role.profiles.full_name,
+          email: emailMap.get(role.user_id) || 'unknown',
+          full_name: role.profiles.full_name || '',
           role: role.role,
           is_active: role.is_active,
           units: role.unit_assignments?.map((ua: any) => ({
@@ -117,18 +130,17 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        const { data: existingUser, error: lookupError } = await adminClient.auth.admin.listUsers();
+        const { data: authUser } = await adminClient
+          .schema('auth')
+          .from('users')
+          .select('id,email')
+          .eq('email', body.email)
+          .maybeSingle();
 
-        if (lookupError) {
-          console.error('[manage-users] User lookup failed:', lookupError.message);
-          throw lookupError;
-        }
-
-        const userExists = existingUser.users.find(u => u.email === body.email);
         let invitedUserId: string;
 
-        if (userExists) {
-          invitedUserId = userExists.id;
+        if (authUser) {
+          invitedUserId = authUser.id;
           console.log('[manage-users] User already exists:', body.email);
 
           const { data: existingRole } = await adminClient
@@ -146,21 +158,77 @@ Deno.serve(async (req: Request) => {
             );
           }
         } else {
-          const tempPassword = crypto.randomUUID();
-          const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
-            email: body.email,
-            password: tempPassword,
-            email_confirm: true,
-            user_metadata: { full_name: body.full_name || '' },
-          });
+          try {
+            const { data: inviteData, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(
+              body.email,
+              { data: { full_name: body.full_name || '' } }
+            );
 
-          if (createError || !newUser.user) {
-            console.error('[manage-users] User creation failed:', createError?.message);
-            throw createError || new Error('Failed to create user');
+            if (inviteError || !inviteData.user) {
+              console.log('[manage-users] inviteUserByEmail failed, trying generateLink fallback:', inviteError?.message);
+
+              const { data: linkData, error: linkError } = await adminClient.auth.admin.generateLink({
+                type: 'invite',
+                email: body.email,
+                options: { data: { full_name: body.full_name || '' } }
+              });
+
+              if (linkError || !linkData.user) {
+                console.error('[manage-users] Both invite and generateLink failed');
+                throw linkError || new Error('Failed to create invite');
+              }
+
+              invitedUserId = linkData.user.id;
+              console.log('[manage-users] Generated invite link for user:', body.email);
+
+              const { error: roleError } = await adminClient
+                .from('user_site_roles')
+                .insert({
+                  user_id: invitedUserId,
+                  site_id: body.site_id,
+                  role: body.role,
+                  is_active: true,
+                });
+
+              if (roleError) {
+                console.error('[manage-users] Role assignment failed:', roleError.message);
+                throw roleError;
+              }
+
+              if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
+                const { error: unitError } = await adminClient
+                  .from('unit_assignments')
+                  .insert(
+                    body.unit_ids.map(unit_id => ({
+                      user_id: invitedUserId,
+                      unit_id,
+                      site_id: body.site_id,
+                    }))
+                  );
+
+                if (unitError) {
+                  console.error('[manage-users] Unit assignment failed:', unitError.message);
+                  throw unitError;
+                }
+              }
+
+              console.log('[manage-users] Generated invite link for user:', body.email, '| Role:', body.role);
+              return new Response(
+                JSON.stringify({
+                  success: true,
+                  message: 'Invite link generated. User will receive email.',
+                  invite_link: linkData.properties?.action_link
+                }),
+                { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+
+            invitedUserId = inviteData.user.id;
+            console.log('[manage-users] Sent invite email to user:', body.email);
+          } catch (e) {
+            console.error('[manage-users] Invite process failed:', e instanceof Error ? e.message : String(e));
+            throw e;
           }
-
-          invitedUserId = newUser.user.id;
-          console.log('[manage-users] Created new user:', body.email);
         }
 
         const { error: roleError } = await adminClient
