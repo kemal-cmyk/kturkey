@@ -24,30 +24,37 @@ Deno.serve(async (req: Request) => {
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const authHeader = req.headers.get('Authorization');
     if (!authHeader) {
       console.error('[manage-users] Missing Authorization header');
       return new Response(
-        JSON.stringify({ error: 'Missing Authorization header' }),
+        JSON.stringify({ error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } }
+    });
+
+    const { data: { user }, error: authError } = await authClient.auth.getUser();
 
     if (authError || !user) {
-      console.error('[manage-users] Authentication failed:', authError?.message);
+      console.error('[manage-users] Authentication failed:', authError?.message || 'Invalid token');
       return new Response(
-        JSON.stringify({ error: 'Authentication failed: ' + (authError?.message || 'Invalid token') }),
+        JSON.stringify({ error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const { data: profile } = await supabase
+    const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+
+    const { data: profile } = await adminClient
       .from('profiles')
       .select('is_super_admin')
       .eq('id', user.id)
@@ -56,7 +63,7 @@ Deno.serve(async (req: Request) => {
     if (!profile?.is_super_admin) {
       console.error('[manage-users] Access denied for user:', user.email, '- not superadmin');
       return new Response(
-        JSON.stringify({ error: 'Not superadmin' }),
+        JSON.stringify({ error: 'Forbidden: not superadmin' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -66,7 +73,7 @@ Deno.serve(async (req: Request) => {
 
     switch (body.action) {
       case 'list_users': {
-        const { data: roles, error } = await supabase
+        const { data: roles, error } = await adminClient
           .from('user_site_roles')
           .select(`
             user_id,
@@ -110,7 +117,7 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        const { data: existingUser, error: lookupError } = await supabase.auth.admin.listUsers();
+        const { data: existingUser, error: lookupError } = await adminClient.auth.admin.listUsers();
 
         if (lookupError) {
           console.error('[manage-users] User lookup failed:', lookupError.message);
@@ -124,7 +131,7 @@ Deno.serve(async (req: Request) => {
           invitedUserId = userExists.id;
           console.log('[manage-users] User already exists:', body.email);
 
-          const { data: existingRole } = await supabase
+          const { data: existingRole } = await adminClient
             .from('user_site_roles')
             .select('id')
             .eq('user_id', invitedUserId)
@@ -140,7 +147,7 @@ Deno.serve(async (req: Request) => {
           }
         } else {
           const tempPassword = crypto.randomUUID();
-          const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
+          const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
             email: body.email,
             password: tempPassword,
             email_confirm: true,
@@ -156,7 +163,7 @@ Deno.serve(async (req: Request) => {
           console.log('[manage-users] Created new user:', body.email);
         }
 
-        const { error: roleError } = await supabase
+        const { error: roleError } = await adminClient
           .from('user_site_roles')
           .insert({
             user_id: invitedUserId,
@@ -171,7 +178,7 @@ Deno.serve(async (req: Request) => {
         }
 
         if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
-          const { error: unitError } = await supabase
+          const { error: unitError } = await adminClient
             .from('unit_assignments')
             .insert(
               body.unit_ids.map(unit_id => ({
@@ -203,7 +210,7 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        const { error: roleError } = await supabase
+        const { error: roleError } = await adminClient
           .from('user_site_roles')
           .update({ role: body.role })
           .eq('user_id', body.user_id)
@@ -214,7 +221,7 @@ Deno.serve(async (req: Request) => {
           throw roleError;
         }
 
-        const { error: deleteError } = await supabase
+        const { error: deleteError } = await adminClient
           .from('unit_assignments')
           .delete()
           .eq('user_id', body.user_id)
@@ -225,7 +232,7 @@ Deno.serve(async (req: Request) => {
         }
 
         if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
-          const { error: unitError } = await supabase
+          const { error: unitError } = await adminClient
             .from('unit_assignments')
             .insert(
               body.unit_ids.map(unit_id => ({
@@ -257,7 +264,7 @@ Deno.serve(async (req: Request) => {
           );
         }
 
-        const { error } = await supabase
+        const { error } = await adminClient
           .from('user_site_roles')
           .update({ is_active: !body.deactivated })
           .eq('user_id', body.user_id)
@@ -287,10 +294,7 @@ Deno.serve(async (req: Request) => {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
     console.error('[manage-users] Error:', errorMessage, error);
     return new Response(
-      JSON.stringify({
-        error: 'Operation failed: ' + errorMessage,
-        details: error instanceof Error ? error.stack : undefined
-      }),
+      JSON.stringify({ error: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

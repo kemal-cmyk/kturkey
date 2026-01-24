@@ -58,7 +58,11 @@ export default function UserManagement() {
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
+      if (!session || !session.access_token) {
+        setError('You must be logged in to perform this action');
+        setLoading(false);
+        return;
+      }
 
       const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users`;
       const response = await fetch(apiUrl, {
@@ -132,9 +136,14 @@ export default function UserManagement() {
     setError('');
     setSuccess('');
 
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session || !session.access_token) {
+      setError('You must be logged in to perform this action');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
 
       const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users`;
 
@@ -208,10 +217,14 @@ export default function UserManagement() {
     setError('');
     setSuccess('');
 
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session || !session.access_token) {
+      setError('You must be logged in to perform this action');
+      setLoading(false);
+      return;
+    }
 
+    try {
       const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users`;
       const response = await fetch(apiUrl, {
         method: 'POST',
