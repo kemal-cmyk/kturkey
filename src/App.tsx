@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Onboarding from './pages/Onboarding';
 import Dashboard from './pages/Dashboard';
 import SiteWizard from './pages/SiteWizard';
 import Units from './pages/Units';
@@ -74,6 +75,14 @@ function AppRoutes() {
           <PublicRoute>
             <Register />
           </PublicRoute>
+        }
+      />
+      <Route
+        path="/onboarding"
+        element={
+          <PrivateRoute>
+            <Onboarding />
+          </PrivateRoute>
         }
       />
       <Route

@@ -234,9 +234,33 @@ Deno.serve(async (req: Request) => {
               }
 
               if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
+                const { data: conflictingUnits } = await adminClient
+                  .from('units')
+                  .select('id, unit_number, owner_id')
+                  .in('id', body.unit_ids)
+                  .eq('site_id', body.site_id)
+                  .not('owner_id', 'is', null);
+
+                if (conflictingUnits && conflictingUnits.length > 0) {
+                  const conflicts = conflictingUnits.filter(u => u.owner_id !== invitedUserId);
+                  if (conflicts.length > 0) {
+                    return new Response(
+                      JSON.stringify({
+                        error: 'Some units are already owned',
+                        conflicts: conflicts.map(u => u.unit_number)
+                      }),
+                      { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+                    );
+                  }
+                }
+
                 const { error: unitError } = await adminClient
                   .from('units')
-                  .update({ owner_id: invitedUserId })
+                  .update({
+                    owner_id: invitedUserId,
+                    owner_name: body.full_name || '',
+                    owner_email: body.email
+                  })
                   .in('id', body.unit_ids)
                   .eq('site_id', body.site_id);
 
@@ -280,9 +304,46 @@ Deno.serve(async (req: Request) => {
         }
 
         if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
+          const { data: conflictingUnits } = await adminClient
+            .from('units')
+            .select('id, unit_number, owner_id')
+            .in('id', body.unit_ids)
+            .eq('site_id', body.site_id)
+            .not('owner_id', 'is', null);
+
+          if (conflictingUnits && conflictingUnits.length > 0) {
+            const conflicts = conflictingUnits.filter(u => u.owner_id !== invitedUserId);
+            if (conflicts.length > 0) {
+              return new Response(
+                JSON.stringify({
+                  error: 'Some units are already owned',
+                  conflicts: conflicts.map(u => u.unit_number)
+                }),
+                { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+          }
+
+          const { data: authUser } = await adminClient
+            .schema('auth')
+            .from('users')
+            .select('email')
+            .eq('id', invitedUserId)
+            .maybeSingle();
+
+          const { data: profile } = await adminClient
+            .from('profiles')
+            .select('full_name')
+            .eq('id', invitedUserId)
+            .maybeSingle();
+
           const { error: unitError } = await adminClient
             .from('units')
-            .update({ owner_id: invitedUserId })
+            .update({
+              owner_id: invitedUserId,
+              owner_name: profile?.full_name || '',
+              owner_email: authUser?.email || ''
+            })
             .in('id', body.unit_ids)
             .eq('site_id', body.site_id);
 
@@ -330,9 +391,46 @@ Deno.serve(async (req: Request) => {
         }
 
         if (body.role === 'homeowner' && body.unit_ids && body.unit_ids.length > 0) {
+          const { data: conflictingUnits } = await adminClient
+            .from('units')
+            .select('id, unit_number, owner_id')
+            .in('id', body.unit_ids)
+            .eq('site_id', body.site_id)
+            .not('owner_id', 'is', null);
+
+          if (conflictingUnits && conflictingUnits.length > 0) {
+            const conflicts = conflictingUnits.filter(u => u.owner_id !== body.user_id);
+            if (conflicts.length > 0) {
+              return new Response(
+                JSON.stringify({
+                  error: 'Some units are already owned',
+                  conflicts: conflicts.map(u => u.unit_number)
+                }),
+                { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+              );
+            }
+          }
+
+          const { data: authUser } = await adminClient
+            .schema('auth')
+            .from('users')
+            .select('email')
+            .eq('id', body.user_id)
+            .maybeSingle();
+
+          const { data: profile } = await adminClient
+            .from('profiles')
+            .select('full_name')
+            .eq('id', body.user_id)
+            .maybeSingle();
+
           const { error: unitError } = await adminClient
             .from('units')
-            .update({ owner_id: body.user_id })
+            .update({
+              owner_id: body.user_id,
+              owner_name: profile?.full_name || '',
+              owner_email: authUser?.email || ''
+            })
             .in('id', body.unit_ids)
             .eq('site_id', body.site_id);
 
