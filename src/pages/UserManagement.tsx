@@ -76,7 +76,8 @@ export default function UserManagement() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to fetch users');
+        const errorMsg = result.error || 'Failed to fetch users';
+        throw new Error(`[${response.status}] ${errorMsg}`);
       }
 
       setUsers(result.users || []);
@@ -157,7 +158,8 @@ export default function UserManagement() {
         const result = await response.json();
 
         if (!response.ok) {
-          throw new Error(result.error || 'Failed to invite user');
+          const errorMsg = result.error || 'Failed to invite user';
+          throw new Error(`[${response.status}] ${errorMsg}`);
         }
 
         setSuccess('User invited successfully');
@@ -180,7 +182,8 @@ export default function UserManagement() {
         const result = await response.json();
 
         if (!response.ok) {
-          throw new Error(result.error || 'Failed to update user');
+          const errorMsg = result.error || 'Failed to update user';
+          throw new Error(`[${response.status}] ${errorMsg}`);
         }
 
         setSuccess('User updated successfully');
@@ -227,7 +230,8 @@ export default function UserManagement() {
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || 'Failed to update user status');
+        const errorMsg = result.error || 'Failed to update user status';
+        throw new Error(`[${response.status}] ${errorMsg}`);
       }
 
       setSuccess(`User ${user.is_active ? 'deactivated' : 'activated'} successfully`);
