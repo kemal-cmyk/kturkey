@@ -41,7 +41,7 @@ Deno.serve(async (req: Request) => {
       method: "POST",
       headers: {
         "Authorization": "Bearer " + supabaseServiceKey,
-        "apikey": supabaseAnonKey,
+        "apikey": supabaseServiceKey,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -54,7 +54,7 @@ Deno.serve(async (req: Request) => {
     if (!authRes.ok) {
       const errText = await authRes.text();
       return new Response(
-        JSON.stringify({ error: "Auth failed: " + errText }),
+        JSON.stringify({ error: "Auth failed", details: errText }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -64,7 +64,7 @@ Deno.serve(async (req: Request) => {
 
     if (!userId) {
       return new Response(
-        JSON.stringify({ error: "No user ID returned" }),
+        JSON.stringify({ error: "No user ID returned", authData: authData }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
