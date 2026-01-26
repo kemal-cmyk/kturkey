@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { LanguageProvider } from './contexts/LanguageContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -20,6 +21,7 @@ import Tickets from './pages/Tickets';
 import Settings from './pages/Settings';
 import MyAccount from './pages/MyAccount';
 import UserManagement from './pages/UserManagement';
+import LanguageSettings from './pages/LanguageSettings';
 import { Loader2 } from 'lucide-react';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -243,6 +245,16 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
+      <Route
+        path="/language"
+        element={
+          <PrivateRoute>
+            <Layout>
+              <LanguageSettings />
+            </Layout>
+          </PrivateRoute>
+        }
+      />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
@@ -253,7 +265,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        <LanguageProvider>
+          <AppRoutes />
+        </LanguageProvider>
       </AuthProvider>
     </BrowserRouter>
   );

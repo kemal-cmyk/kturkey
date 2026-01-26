@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { useLanguage, Language } from '../contexts/LanguageContext';
 import {
   LayoutDashboard,
   Building2,
@@ -20,18 +21,28 @@ import {
   Wallet,
   BarChart2,
   UserCog,
+  Globe,
 } from 'lucide-react';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
+const languageLabels: Record<Language, string> = {
+  TR: 'TR',
+  EN: 'EN',
+  RU: 'RU',
+  DE: 'DE',
+};
+
 export default function Layout({ children }: LayoutProps) {
   const { user, profile, isSuperAdmin, sites, currentSite, currentRole, signOut, setCurrentSite } = useAuth();
+  const { language, setLanguage } = useLanguage();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [siteDropdownOpen, setSiteDropdownOpen] = useState(false);
+  const [langDropdownOpen, setLangDropdownOpen] = useState(false);
 
   const isAdmin = isSuperAdmin || currentRole?.role === 'admin';
   const isBoardMember = currentRole?.role === 'board_member';
@@ -51,6 +62,7 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Support Tickets', href: '/tickets', icon: Ticket, show: true },
     { name: 'My Account', href: '/my-account', icon: Users, show: isHomeowner },
     { name: 'User Management', href: '/user-management', icon: UserCog, show: isSuperAdmin },
+    { name: 'Language', href: '/language', icon: Globe, show: true },
     { name: 'Settings', href: '/settings', icon: Settings, show: isAdmin },
   ].filter(item => item.show);
 
@@ -80,7 +92,33 @@ export default function Layout({ children }: LayoutProps) {
           <Menu className="w-6 h-6" />
         </button>
         <span className="text-white font-bold text-lg">KTurkey</span>
-        <div className="w-10" />
+        <div className="relative">
+          <button
+            onClick={() => setLangDropdownOpen(!langDropdownOpen)}
+            className="text-white p-2 rounded-lg hover:bg-white/10 flex items-center space-x-1"
+          >
+            <Globe className="w-5 h-5" />
+            <span className="text-xs font-medium">{languageLabels[language]}</span>
+          </button>
+          {langDropdownOpen && (
+            <div className="absolute top-full right-0 mt-1 bg-white rounded-lg shadow-lg overflow-hidden z-10 min-w-[100px]">
+              {(Object.keys(languageLabels) as Language[]).map(lang => (
+                <button
+                  key={lang}
+                  onClick={() => {
+                    setLanguage(lang);
+                    setLangDropdownOpen(false);
+                  }}
+                  className={`w-full px-4 py-2 text-left text-sm hover:bg-gray-100 ${
+                    lang === language ? 'bg-gray-50 text-[#002561] font-medium' : 'text-gray-700'
+                  }`}
+                >
+                  {lang}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {sidebarOpen && (

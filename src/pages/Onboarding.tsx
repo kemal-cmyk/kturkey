@@ -17,21 +17,70 @@ interface Unit {
 export default function Onboarding() {
   const { currentSite, refreshSites } = useAuth();
   const navigate = useNavigate();
+  const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState<'site' | 'units' | 'complete'>('site');
   const [sites, setSites] = useState<Site[]>([]);
   const [units, setUnits] = useState<Unit[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState('');
+  const [selectedSiteName, setSelectedSiteName] = useState('');
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [hasExistingSite, setHasExistingSite] = useState(false);
 
   useEffect(() => {
     if (currentSite) {
       navigate('/dashboard');
     } else {
-      fetchSites();
+      checkUserSiteAndInit();
     }
   }, [currentSite, navigate]);
+
+  const checkUserSiteAndInit = async () => {
+    setInitialLoading(true);
+    setError('');
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setError('You must be logged in');
+        setInitialLoading(false);
+        return;
+      }
+
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/self-onboarding`;
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action: 'get_user_site' }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to check user status');
+      }
+
+      if (result.has_site) {
+        setHasExistingSite(true);
+        setSelectedSiteId(result.site_id);
+        setSelectedSiteName(result.site_name);
+        await fetchUnits(result.site_id);
+        setStep('units');
+      } else {
+        await fetchSites();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to initialize');
+      await fetchSites();
+    } finally {
+      setInitialLoading(false);
+    }
+  };
 
   const fetchSites = async () => {
     setLoading(true);
@@ -106,9 +155,10 @@ export default function Onboarding() {
     }
   };
 
-  const handleSiteSelect = (siteId: string) => {
-    setSelectedSiteId(siteId);
-    fetchUnits(siteId);
+  const handleSiteSelect = (site: Site) => {
+    setSelectedSiteId(site.id);
+    setSelectedSiteName(site.name);
+    fetchUnits(site.id);
   };
 
   const handleUnitToggle = (unitId: string) => {
@@ -136,6 +186,8 @@ export default function Onboarding() {
       }
 
       const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/self-onboarding`;
+      const action = hasExistingSite ? 'assign_units' : 'complete_onboarding';
+
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
@@ -144,7 +196,7 @@ export default function Onboarding() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          action: 'complete_onboarding',
+          action,
           site_id: selectedSiteId,
           unit_ids: selectedUnitIds,
         }),
@@ -175,6 +227,17 @@ export default function Onboarding() {
     return null;
   }
 
+  if (initialLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 flex items-center justify-center p-4">
+        <div className="text-center">
+          <Loader2 className="w-10 h-10 animate-spin text-[#002561] mx-auto mb-4" />
+          <p className="text-gray-600">Loading your profile...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 flex items-center justify-center p-4">
       <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl overflow-hidden">
@@ -183,7 +246,11 @@ export default function Onboarding() {
             <Home className="w-8 h-8" />
             <div>
               <h1 className="text-2xl font-bold">Welcome to Site Manager</h1>
-              <p className="text-blue-100 mt-1">Complete your onboarding to get started</p>
+              <p className="text-blue-100 mt-1">
+                {hasExistingSite
+                  ? `Select your apartment at ${selectedSiteName}`
+                  : 'Complete your onboarding to get started'}
+              </p>
             </div>
           </div>
         </div>
@@ -196,7 +263,7 @@ export default function Onboarding() {
             </div>
           )}
 
-          {step === 'site' && (
+          {step === 'site' && !hasExistingSite && (
             <div>
               <div className="flex items-center justify-center mb-6">
                 <div className="flex items-center space-x-2">
@@ -231,7 +298,7 @@ export default function Onboarding() {
                   {sites.map(site => (
                     <button
                       key={site.id}
-                      onClick={() => handleSiteSelect(site.id)}
+                      onClick={() => handleSiteSelect(site)}
                       disabled={loading}
                       className="w-full p-6 border-2 border-gray-200 rounded-lg hover:border-[#002561] hover:bg-blue-50 transition-all text-left disabled:opacity-50 disabled:cursor-not-allowed group"
                     >
@@ -246,7 +313,7 @@ export default function Onboarding() {
                           </div>
                         </div>
                         <div className="text-[#002561] opacity-0 group-hover:opacity-100 transition-opacity">
-                          →
+                          &rarr;
                         </div>
                       </div>
                     </button>
@@ -273,7 +340,11 @@ export default function Onboarding() {
               <div className="text-center mb-8">
                 <Home className="w-12 h-12 text-[#002561] mx-auto mb-3" />
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">Select Your Unit(s)</h2>
-                <p className="text-gray-600">Choose the apartment(s) you own</p>
+                <p className="text-gray-600">
+                  {hasExistingSite
+                    ? `Choose your apartment(s) at ${selectedSiteName}`
+                    : 'Choose the apartment(s) you own'}
+                </p>
               </div>
 
               {loading ? (
@@ -284,13 +355,18 @@ export default function Onboarding() {
               ) : units.length === 0 ? (
                 <div className="p-12 text-center">
                   <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-600">No available units</p>
-                  <button
-                    onClick={() => setStep('site')}
-                    className="mt-4 text-[#002561] hover:underline"
-                  >
-                    Go back
-                  </button>
+                  <p className="text-gray-600">No available units at this site</p>
+                  <p className="text-sm text-gray-500 mt-2">
+                    All units may already be assigned. Contact your administrator.
+                  </p>
+                  {!hasExistingSite && (
+                    <button
+                      onClick={() => setStep('site')}
+                      className="mt-4 text-[#002561] hover:underline"
+                    >
+                      Select a different site
+                    </button>
+                  )}
                 </div>
               ) : (
                 <>
@@ -316,22 +392,24 @@ export default function Onboarding() {
                   </div>
 
                   <div className="flex space-x-3">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStep('site');
-                        setSelectedUnitIds([]);
-                      }}
-                      disabled={loading}
-                      className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Back
-                    </button>
+                    {!hasExistingSite && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStep('site');
+                          setSelectedUnitIds([]);
+                        }}
+                        disabled={loading}
+                        className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Back
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleComplete}
                       disabled={loading || selectedUnitIds.length === 0}
-                      className="flex-1 px-6 py-3 bg-[#002561] text-white rounded-lg hover:bg-[#003875] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                      className={`${hasExistingSite ? 'w-full' : 'flex-1'} px-6 py-3 bg-[#002561] text-white rounded-lg hover:bg-[#003875] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2`}
                     >
                       {loading ? (
                         <>
@@ -340,7 +418,7 @@ export default function Onboarding() {
                         </>
                       ) : (
                         <>
-                          <span>Complete Onboarding</span>
+                          <span>Complete Setup</span>
                           <span className="text-sm bg-white/20 px-2 py-0.5 rounded">
                             {selectedUnitIds.length}
                           </span>
@@ -360,7 +438,7 @@ export default function Onboarding() {
               </div>
               <h2 className="text-2xl font-bold text-gray-900 mb-2">Welcome Aboard!</h2>
               <p className="text-gray-600 mb-4">
-                Your onboarding is complete. Redirecting to dashboard...
+                Your setup is complete. Redirecting to dashboard...
               </p>
               <Loader2 className="w-6 h-6 animate-spin text-[#002561] mx-auto" />
             </div>

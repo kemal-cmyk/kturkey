@@ -7,7 +7,7 @@ const corsHeaders = {
 };
 
 interface RequestBody {
-  action: 'list_sites' | 'list_units' | 'complete_onboarding';
+  action: 'list_sites' | 'list_units' | 'complete_onboarding' | 'get_user_site' | 'assign_units';
   site_id?: string;
   unit_ids?: string[];
 }
@@ -66,6 +66,100 @@ Deno.serve(async (req: Request) => {
         console.log('[self-onboarding] Listed', sites?.length || 0, 'sites');
         return new Response(
           JSON.stringify({ sites: sites || [] }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      case 'get_user_site': {
+        const { data: userRole } = await adminClient
+          .from('user_site_roles')
+          .select('site_id, role, sites(id, name)')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (userRole && userRole.sites) {
+          console.log('[self-onboarding] User has existing site:', user.email);
+          return new Response(
+            JSON.stringify({
+              has_site: true,
+              site_id: userRole.site_id,
+              site_name: (userRole.sites as any).name,
+              role: userRole.role
+            }),
+            { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        return new Response(
+          JSON.stringify({ has_site: false }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      case 'assign_units': {
+        if (!body.site_id || !body.unit_ids || body.unit_ids.length === 0) {
+          return new Response(
+            JSON.stringify({ error: 'Site ID and at least one unit are required' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const { data: existingRole } = await adminClient
+          .from('user_site_roles')
+          .select('id, site_id')
+          .eq('user_id', user.id)
+          .eq('site_id', body.site_id)
+          .maybeSingle();
+
+        if (!existingRole) {
+          return new Response(
+            JSON.stringify({ error: 'You must be assigned to this site first' }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const { data: conflictingUnits } = await adminClient
+          .from('units')
+          .select('id, unit_number, owner_id')
+          .in('id', body.unit_ids)
+          .eq('site_id', body.site_id)
+          .not('owner_id', 'is', null);
+
+        if (conflictingUnits && conflictingUnits.length > 0) {
+          return new Response(
+            JSON.stringify({
+              error: 'Some units are already owned',
+              conflicts: conflictingUnits.map(u => u.unit_number)
+            }),
+            { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const { data: profile } = await adminClient
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        const { error: unitError } = await adminClient
+          .from('units')
+          .update({
+            owner_id: user.id,
+            owner_name: profile?.full_name || '',
+            owner_email: user.email || ''
+          })
+          .in('id', body.unit_ids)
+          .eq('site_id', body.site_id)
+          .is('owner_id', null);
+
+        if (unitError) {
+          console.error('[self-onboarding] Unit assignment failed:', unitError.message);
+          throw unitError;
+        }
+
+        console.log('[self-onboarding] Assigned units to user:', user.email, '| Units:', body.unit_ids.length);
+        return new Response(
+          JSON.stringify({ success: true, message: 'Units assigned successfully' }),
           { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }

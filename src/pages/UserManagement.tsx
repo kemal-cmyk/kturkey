@@ -57,35 +57,23 @@ export default function UserManagement() {
     setError('');
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session || !session.access_token) {
-        setError('You must be logged in to perform this action');
-        setLoading(false);
-        return;
+      const { data, error: rpcError } = await supabase
+        .rpc('get_site_users', { p_site_id: currentSite.id });
+
+      if (rpcError) {
+        throw new Error(rpcError.message);
       }
 
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/manage-users`;
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          action: 'list_users',
-          site_id: currentSite.id,
-        }),
-      });
+      const mappedUsers: User[] = (data || []).map((u: any) => ({
+        user_id: u.user_id,
+        email: u.email || 'unknown',
+        full_name: u.full_name || '',
+        role: u.role as 'board_member' | 'homeowner',
+        is_active: u.is_active,
+        units: Array.isArray(u.units) ? u.units : [],
+      }));
 
-      const result = await response.json();
-
-      if (!response.ok) {
-        const errorMsg = result.error || 'Failed to fetch users';
-        throw new Error(`[${response.status}] ${errorMsg}`);
-      }
-
-      setUsers(result.users || []);
+      setUsers(mappedUsers);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch users');
     } finally {

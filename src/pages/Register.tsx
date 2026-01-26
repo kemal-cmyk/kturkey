@@ -1,19 +1,46 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase';
 import { Building2, Eye, EyeOff, Loader2 } from 'lucide-react';
+
+interface Site {
+  id: string;
+  name: string;
+}
 
 export default function Register() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [selectedSiteId, setSelectedSiteId] = useState('');
+  const [sites, setSites] = useState<Site[]>([]);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [sitesLoading, setSitesLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const { signUp } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    fetchSites();
+  }, []);
+
+  const fetchSites = async () => {
+    setSitesLoading(true);
+    const { data } = await supabase
+      .from('sites')
+      .select('id, name')
+      .eq('is_active', true)
+      .order('name');
+    setSites(data || []);
+    if (data && data.length > 0) {
+      setSelectedSiteId(data[0].id);
+    }
+    setSitesLoading(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,15 +56,34 @@ export default function Register() {
       return;
     }
 
+    if (!selectedSiteId) {
+      setError('Please select a complex/site');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      const { error: signUpError } = await signUp(email, password, fullName);
+      const { data, error: signUpError } = await signUp(email, password, fullName);
 
       if (signUpError) throw signUpError;
 
-      setSuccess(true);
-      setTimeout(() => navigate('/onboarding'), 2000);
+      if (data?.user) {
+        const { error: roleError } = await supabase
+          .from('user_site_roles')
+          .insert({
+            user_id: data.user.id,
+            site_id: selectedSiteId,
+            role: 'homeowner'
+          });
+
+        if (roleError) {
+          console.error('Role assignment error:', roleError);
+        }
+
+        setSuccess(true);
+        setTimeout(() => navigate('/onboarding'), 2000);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to register');
     } finally {
@@ -53,8 +99,8 @@ export default function Register() {
             <Building2 className="w-8 h-8 text-green-600" />
           </div>
           <h2 className="text-2xl font-bold text-gray-900 mb-2">Account Created!</h2>
-          <p className="text-gray-600">Complete your onboarding to get started.</p>
-          <p className="text-gray-500 text-sm mt-2">Redirecting to onboarding...</p>
+          <p className="text-gray-600">Select your apartment to complete setup.</p>
+          <p className="text-gray-500 text-sm mt-2">Redirecting...</p>
         </div>
       </div>
     );
@@ -113,6 +159,29 @@ export default function Register() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Select Complex / Site
+              </label>
+              <div className="relative">
+                <select
+                  value={selectedSiteId}
+                  onChange={(e) => setSelectedSiteId(e.target.value)}
+                  required
+                  disabled={sitesLoading}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] focus:border-[#002561] appearance-none bg-white disabled:bg-gray-100"
+                >
+                  <option value="" disabled>
+                    {sitesLoading ? 'Loading sites...' : 'Choose your building...'}
+                  </option>
+                  {sites.map(site => (
+                    <option key={site.id} value={site.id}>{site.name}</option>
+                  ))}
+                </select>
+                <Building2 className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
                 Password
               </label>
               <div className="relative">
@@ -150,7 +219,7 @@ export default function Register() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || sitesLoading}
               className="w-full bg-[#002561] hover:bg-[#003380] text-white font-medium py-3 px-4 rounded-lg transition-colors disabled:opacity-50 flex items-center justify-center"
             >
               {loading ? (
