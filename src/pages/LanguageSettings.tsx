@@ -3,14 +3,14 @@ import { useLanguage, Language } from '../contexts/LanguageContext';
 import { Globe, Check, Loader2 } from 'lucide-react';
 
 const languages: { code: Language; name: string; nativeName: string; flag: string }[] = [
-  { code: 'TR', name: 'Turkish', nativeName: 'Turkce', flag: 'TR' },
-  { code: 'EN', name: 'English', nativeName: 'English', flag: 'GB' },
-  { code: 'RU', name: 'Russian', nativeName: 'Russkiy', flag: 'RU' },
-  { code: 'DE', name: 'German', nativeName: 'Deutsch', flag: 'DE' },
+  { code: 'tr', name: 'Turkish', nativeName: 'Türkçe', flag: '🇹🇷' },
+  { code: 'en', name: 'English', nativeName: 'English', flag: '🇬🇧' },
+  { code: 'ru', name: 'Russian', nativeName: 'Русский', flag: '🇷🇺' },
+  { code: 'de', name: 'German', nativeName: 'Deutsch', flag: '🇩🇪' },
 ];
 
 export default function LanguageSettings() {
-  const { language, updateLanguageInDB, t } = useLanguage();
+  const { language, updateLanguageInDB } = useLanguage();
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
 
@@ -36,8 +36,8 @@ export default function LanguageSettings() {
           <div className="flex items-center space-x-3">
             <Globe className="w-8 h-8 text-[#002561]" />
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">{t('languageSettings')}</h1>
-              <p className="text-gray-600 mt-1">{t('selectLanguage')}</p>
+              <h1 className="text-3xl font-bold text-gray-900">Language Settings</h1>
+              <p className="text-gray-600 mt-1">Choose your preferred language</p>
             </div>
           </div>
         </div>
@@ -45,13 +45,13 @@ export default function LanguageSettings() {
         {success && (
           <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-center space-x-2">
             <Check className="w-5 h-5 text-green-600" />
-            <p className="text-green-800">{t('languageUpdated')}</p>
+            <p className="text-green-800">Language updated successfully</p>
           </div>
         )}
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">{t('selectLanguage')}</h2>
+            <h2 className="text-lg font-semibold text-gray-900 mb-4">Select Language</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               {languages.map(lang => (
                 <button
@@ -89,7 +89,7 @@ export default function LanguageSettings() {
           {loading && (
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-center space-x-2">
               <Loader2 className="w-5 h-5 animate-spin text-[#002561]" />
-              <span className="text-gray-600">{t('loading')}...</span>
+              <span className="text-gray-600">Loading...</span>
             </div>
           )}
         </div>

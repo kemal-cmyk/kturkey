@@ -29,10 +29,10 @@ interface LayoutProps {
 }
 
 const languageLabels: Record<Language, string> = {
-  TR: 'TR',
-  EN: 'EN',
-  RU: 'RU',
-  DE: 'DE',
+  tr: 'TR',
+  en: 'EN',
+  ru: 'RU',
+  de: 'DE',
 };
 
 export default function Layout({ children }: LayoutProps) {
@@ -113,7 +113,7 @@ export default function Layout({ children }: LayoutProps) {
                     lang === language ? 'bg-gray-50 text-[#002561] font-medium' : 'text-gray-700'
                   }`}
                 >
-                  {lang}
+                  {languageLabels[lang]}
                 </button>
               ))}
             </div>
