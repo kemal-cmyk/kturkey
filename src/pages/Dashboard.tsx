@@ -25,7 +25,7 @@ export default function Dashboard() {
   const [debtAlerts, setDebtAlerts] = useState<DebtAlert[]>([]);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
-  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]); // ✅ Added to store raw entries for calculation
+  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]);
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
 
   // Operational Data State
@@ -61,7 +61,7 @@ export default function Dashboard() {
       setActivePeriod(periods);
 
       if (periods) {
-        // Financial Summary
+        // Financial Summary (Still useful for Total Budget)
         const { data: summaryData } = await supabase
           .from('site_financial_summary')
           .select('*')
@@ -79,7 +79,6 @@ export default function Dashboard() {
         setBudgetCategories(categories || []);
 
         // Ledger Data (Charts)
-        // ✅ FIX: Select ALL columns so we have 'amount_reporting_try' and 'category'
         const { data: ledgerData } = await supabase
           .from('ledger_entries')
           .select('*')
@@ -94,7 +93,6 @@ export default function Dashboard() {
           const month = format(new Date(entry.entry_date), 'MMM');
           if (!grouped[month]) grouped[month] = { income: 0, expense: 0 };
           
-          // ✅ FIX: Use Reporting Amount (TL) for monthly charts too
           const amount = Number(entry.amount_reporting_try || entry.amount);
 
           if (entry.entry_type === 'income') {
@@ -166,6 +164,37 @@ export default function Dashboard() {
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
     : 0;
 
+  // --- LIVE CALCULATIONS ---
+  
+  // 1. Calculate Totals directly from Ledger Entries (Accurate Math)
+  const totalCollectedLive = periodEntries
+    .filter(e => e.entry_type === 'income')
+    .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+  const totalSpentLive = periodEntries
+    .filter(e => e.entry_type === 'expense')
+    .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+  // 2. Prepare Chart Data
+  const budgetData = budgetCategories.map((cat, idx) => {
+    const actualSpent = periodEntries
+      .filter(e => e.category === cat.category_name)
+      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+    return {
+      name: cat.category_name,
+      planned: Number(cat.planned_amount),
+      actual: actualSpent,
+      color: COLORS[idx % COLORS.length],
+    };
+  });
+
+  const pieData = budgetData.map((data, idx) => ({
+    name: data.name,
+    value: data.actual,
+    color: COLORS[idx % COLORS.length],
+  })).filter(d => d.value > 0);
+
   // --- RENDER ---
 
   if (!currentSite) {
@@ -192,27 +221,6 @@ export default function Dashboard() {
       </div>
     );
   }
-
-  // ✅ FIX: Calculate Actual Spent/Collected dynamically from ledger entries
-  // This sums up all EUR, USD, and TL entries converted to TL
-  const budgetData = budgetCategories.map((cat, idx) => {
-    const actualTotal = periodEntries
-      .filter(e => e.category === cat.category_name)
-      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-    return {
-      name: cat.category_name,
-      planned: Number(cat.planned_amount),
-      actual: actualTotal, // Using the live calculated total
-      color: COLORS[idx % COLORS.length],
-    };
-  });
-
-  const pieData = budgetData.map((data, idx) => ({
-    name: data.name,
-    value: data.actual,
-    color: COLORS[idx % COLORS.length],
-  })).filter(d => d.value > 0);
 
   return (
     <div className="p-6 space-y-6">
@@ -261,7 +269,7 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      {/* SECTION 2: Financial Overview */}
+      {/* SECTION 2: Financial Overview (UPDATED WITH LIVE CALCULATIONS) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
@@ -271,15 +279,15 @@ export default function Dashboard() {
         />
         <StatCard
           title="Total Collected"
-          value={formatCurrency(summary?.total_collected || 0)}
-          subtitle={`${summary?.collection_rate || 0}% collection rate`}
+          value={formatCurrency(totalCollectedLive)} 
+          subtitle="Year to date"
           icon={<TrendingUp className="w-5 h-5" />}
           color="bg-green-600"
         />
         <StatCard
           title="Total Spent"
-          value={formatCurrency(summary?.actual_expenses || 0)}
-          subtitle={`${summary?.budget_utilization || 0}% of budget`}
+          value={formatCurrency(totalSpentLive)} 
+          subtitle={`${summary?.total_budget ? Math.round((totalSpentLive / summary.total_budget) * 100) : 0}% of budget`}
           icon={<TrendingDown className="w-5 h-5" />}
           color="bg-orange-500"
         />
