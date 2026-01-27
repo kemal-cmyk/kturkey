@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import { Link } from 'react-router-dom';
 import {
   User, Receipt, CreditCard, Calendar, Loader2,
-  TrendingDown, AlertTriangle, Clock,
+  TrendingDown, AlertTriangle, Clock, CheckCircle2, FileText
 } from 'lucide-react';
 import { format } from 'date-fns';
-import type { Unit, Payment, DebtWorkflow, UnitBalance } from '../types/database';
+import type { Unit, DebtWorkflow, UnitBalance } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
 export default function MyAccount() {
@@ -14,7 +15,27 @@ export default function MyAccount() {
   const [loading, setLoading] = useState(true);
   const [unit, setUnit] = useState<Unit | null>(null);
   const [balance, setBalance] = useState<UnitBalance | null>(null);
-  const [payments, setPayments] = useState<Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null }>>([]);
+  
+  // Data State
+  const [payments, setPayments] = useState<Array<{ 
+    id: string; 
+    amount: number; 
+    payment_date: string; 
+    payment_method: string; 
+    reference_no: string | null; 
+    description: string | null;
+    currency_code: string; 
+  }>>([]);
+  
+  const [dues, setDues] = useState<Array<{
+    id: string;
+    month_date: string;
+    total_amount: number;
+    paid_amount: number;
+    status: string;
+    currency_code: string;
+  }>>([]);
+
   const [debtWorkflow, setDebtWorkflow] = useState<DebtWorkflow | null>(null);
 
   useEffect(() => {
@@ -27,67 +48,66 @@ export default function MyAccount() {
     if (!user || !currentSite) return;
     setLoading(true);
 
-    const { data: unitData } = await supabase
-      .from('units')
-      .select('*')
-      .eq('site_id', currentSite.id)
-      .eq('owner_id', user.id)
-      .maybeSingle();
+    try {
+      // 1. Get the User's Unit
+      const { data: unitData } = await supabase
+        .from('units')
+        .select('*')
+        .eq('site_id', currentSite.id)
+        .eq('owner_id', user.id)
+        .maybeSingle();
 
-    setUnit(unitData);
+      setUnit(unitData);
 
-    if (unitData) {
-      const { data: paymentIds } = await supabase
-        .from('payments')
-        .select('id')
-        .eq('unit_id', unitData.id);
+      if (unitData) {
+        // 2. Fetch all data in parallel
+        const [balanceRes, paymentsRes, duesRes, workflowRes] = await Promise.all([
+          // A. Balance View
+          supabase
+            .from('unit_balances_from_ledger')
+            .select('*')
+            .eq('unit_id', unitData.id)
+            .maybeSingle(),
+          
+          // B. Payments (Linked via Payment IDs to Ledger for description, or direct from payments table)
+          supabase
+            .from('payments')
+            .select('*')
+            .eq('unit_id', unitData.id)
+            .order('payment_date', { ascending: false }),
 
-      const paymentIdArray = (paymentIds || []).map(p => p.id);
+          // C. Dues (To show charges and unpaid items)
+          supabase
+            .from('dues')
+            .select('*')
+            .eq('unit_id', unitData.id)
+            .order('month_date', { ascending: false }),
 
-      const [balanceRes, paymentsRes, workflowRes] = await Promise.all([
-        supabase
-          .from('unit_balances_from_ledger')
-          .select('*')
-          .eq('unit_id', unitData.id)
-          .maybeSingle(),
-        supabase
-          .from('ledger_entries')
-          .select('id, amount, entry_date, description, category')
-          .eq('entry_type', 'income')
-          .in('payment_id', paymentIdArray)
-          .order('entry_date', { ascending: false }),
-        supabase
-          .from('debt_workflows')
-          .select('*')
-          .eq('unit_id', unitData.id)
-          .eq('is_active', true)
-          .maybeSingle(),
-      ]);
+          // D. Debt Status
+          supabase
+            .from('debt_workflows')
+            .select('*')
+            .eq('unit_id', unitData.id)
+            .eq('is_active', true)
+            .maybeSingle(),
+        ]);
 
-      const formattedPayments = (paymentsRes.data || []).map(entry => {
-        const refMatch = entry.description?.match(/Ref: ([^\s]+)/);
-        return {
-          id: entry.id,
-          amount: entry.amount,
-          payment_date: entry.entry_date,
-          payment_method: 'bank_transfer',
-          reference_no: refMatch ? refMatch[1] : null,
-          description: entry.description,
-        };
-      });
-
-      setBalance(balanceRes.data);
-      setPayments(formattedPayments);
-      setDebtWorkflow(workflowRes.data);
+        setBalance(balanceRes.data);
+        setPayments(paymentsRes.data || []);
+        setDues(duesRes.data || []);
+        setDebtWorkflow(workflowRes.data);
+      }
+    } catch (error) {
+      console.error("Error fetching account data:", error);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = (amount: number, currency: string = 'TRY') => {
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
-      currency: 'TRY',
+      currency: currency,
       minimumFractionDigits: 0,
     }).format(amount);
   };
@@ -95,6 +115,12 @@ export default function MyAccount() {
   const openingBalance = balance?.opening_balance || 0;
   const totalPaid = balance?.total_paid || 0;
   const currentBalance = balance?.current_balance || 0;
+  
+  // Use currency from the most recent due, or site default
+  const displayCurrency = dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
+
+  // Filter for Unpaid/Partial items
+  const unpaidDues = dues.filter(d => d.status !== 'paid');
 
   if (loading) {
     return (
@@ -112,7 +138,7 @@ export default function MyAccount() {
           <h2 className="text-xl font-semibold text-gray-900 mb-2">No Unit Assigned</h2>
           <p className="text-gray-600">
             Your account is not linked to any unit in this site.
-            Please contact the site administrator.
+            Please contact management if you believe this is an error.
           </p>
         </div>
       </div>
@@ -121,18 +147,31 @@ export default function MyAccount() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">My Account</h1>
-        <p className="text-gray-600">
-          Unit {unit.block ? `${unit.block}-` : ''}{unit.unit_number}
-        </p>
+      
+      {/* Header Section */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">My Financials</h1>
+          <p className="text-gray-600">
+            Unit {unit.block ? `${unit.block}-` : ''}{unit.unit_number} • {unit.owner_name}
+          </p>
+        </div>
+        {/* Link to the printable statement page we created */}
+        <Link 
+          to={`/resident-statement?unit_id=${unit.id}`}
+          className="flex items-center px-4 py-2 bg-white border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 shadow-sm transition-colors"
+        >
+          <FileText className="w-4 h-4 mr-2 text-[#002561]" />
+          Print Official Statement
+        </Link>
       </div>
 
+      {/* Alert Section (Debt Status) */}
       {debtWorkflow && debtWorkflow.stage >= 2 && (
-        <div className={`rounded-xl p-4 ${
-          debtWorkflow.stage === 4 ? 'bg-red-50 border border-red-200' :
-          debtWorkflow.stage === 3 ? 'bg-orange-50 border border-orange-200' :
-          'bg-yellow-50 border border-yellow-200'
+        <div className={`rounded-xl p-4 border ${
+          debtWorkflow.stage === 4 ? 'bg-red-50 border-red-200' :
+          debtWorkflow.stage === 3 ? 'bg-orange-50 border-orange-200' :
+          'bg-yellow-50 border-yellow-200'
         }`}>
           <div className="flex items-start space-x-3">
             <AlertTriangle className={`w-6 h-6 flex-shrink-0 ${
@@ -144,7 +183,7 @@ export default function MyAccount() {
                 debtWorkflow.stage === 4 ? 'text-red-900' :
                 debtWorkflow.stage === 3 ? 'text-orange-900' : 'text-yellow-900'
               }`}>
-                {DEBT_STAGES[debtWorkflow.stage as keyof typeof DEBT_STAGES].name} Status
+                Attention Needed: {DEBT_STAGES[debtWorkflow.stage as keyof typeof DEBT_STAGES].name}
               </p>
               <p className={`text-sm mt-1 ${
                 debtWorkflow.stage === 4 ? 'text-red-700' :
@@ -152,7 +191,7 @@ export default function MyAccount() {
               }`}>
                 {DEBT_STAGES[debtWorkflow.stage as keyof typeof DEBT_STAGES].description}
                 {debtWorkflow.legal_case_number && (
-                  <span className="block font-mono mt-1">
+                  <span className="block font-mono mt-1 font-bold">
                     Case Number: {debtWorkflow.legal_case_number}
                   </span>
                 )}
@@ -162,6 +201,7 @@ export default function MyAccount() {
         </div>
       )}
 
+      {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between mb-2">
@@ -169,89 +209,150 @@ export default function MyAccount() {
             <Clock className="w-5 h-5 text-gray-400" />
           </div>
           <p className={`text-2xl font-bold ${openingBalance > 0 ? 'text-red-600' : openingBalance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-            {openingBalance > 0 ? '-' : openingBalance < 0 ? '+' : ''}{formatCurrency(Math.abs(openingBalance))}
+            {formatCurrency(openingBalance, displayCurrency)}
           </p>
-          <p className="text-xs text-gray-500 mt-1">Previous period</p>
+          <p className="text-xs text-gray-500 mt-1">Carried from last period</p>
         </div>
+        
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <div className="flex items-center justify-between mb-2">
             <span className="text-gray-500 text-sm">Total Paid</span>
             <Calendar className="w-5 h-5 text-gray-400" />
           </div>
           <p className="text-2xl font-bold text-green-600">
-            {formatCurrency(totalPaid)}
+            {formatCurrency(totalPaid, displayCurrency)}
           </p>
-          <p className="text-xs text-gray-500 mt-1">{payments.length} payments</p>
+          <p className="text-xs text-gray-500 mt-1">{payments.length} payments recorded</p>
         </div>
-        <div className="bg-[#002561] rounded-xl p-6">
+        
+        <div className={`rounded-xl p-6 shadow-sm border ${currentBalance > 0 ? 'bg-white border-red-200' : 'bg-[#002561] border-[#002561]'}`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-white/70 text-sm">Current Balance</span>
-            <TrendingDown className="w-5 h-5 text-white/70" />
+            <span className={`text-sm ${currentBalance > 0 ? 'text-red-600' : 'text-white/80'}`}>Current Balance</span>
+            <TrendingDown className={`w-5 h-5 ${currentBalance > 0 ? 'text-red-600' : 'text-white/80'}`} />
           </div>
-          <p className={`text-3xl font-bold ${currentBalance > 0 ? 'text-red-200' : 'text-white'}`}>
-            {currentBalance > 0 ? '-' : currentBalance < 0 ? '+' : ''}{formatCurrency(Math.abs(currentBalance))}
+          <p className={`text-3xl font-bold ${currentBalance > 0 ? 'text-red-600' : 'text-white'}`}>
+            {formatCurrency(Math.abs(currentBalance), displayCurrency)}
           </p>
-          <p className="text-xs text-white/70 mt-1">
-            {currentBalance > 0 ? 'Outstanding debt' : currentBalance < 0 ? 'Credit balance' : 'Balanced'}
+          <p className={`text-xs mt-1 ${currentBalance > 0 ? 'text-red-500 font-medium' : 'text-white/70'}`}>
+            {currentBalance > 0 ? 'PLEASE PAY NOW' : currentBalance < 0 ? 'Credit Balance' : 'Account Settled'}
           </p>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="font-semibold text-gray-900">Maintenance Fee Payment History</h3>
-        </div>
-        {payments.length === 0 ? (
-          <div className="p-12 text-center">
-            <CreditCard className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">No payments recorded</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* LEFT COLUMN: Unpaid Dues (Action Items) */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
+          <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+            <h3 className="font-semibold text-gray-900 flex items-center">
+              <AlertTriangle className="w-4 h-4 mr-2 text-orange-500" />
+              Unpaid Dues
+            </h3>
+            {unpaidDues.length > 0 && (
+              <span className="bg-red-100 text-red-700 text-xs font-bold px-2 py-1 rounded-full">
+                {unpaidDues.length} Items
+              </span>
+            )}
           </div>
-        ) : (
-          <div className="max-h-[400px] overflow-y-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 sticky top-0">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Description
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                    Amount
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {payments.map((payment) => (
-                  <tr key={payment.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-3">
-                      <p className="font-medium text-gray-900">
-                        {format(new Date(payment.payment_date), 'MMM d, yyyy')}
-                      </p>
-                      {payment.reference_no && (
-                        <p className="text-xs text-gray-500 font-mono">
-                          Ref: {payment.reference_no}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-6 py-3 text-gray-600">
-                      <p className="text-sm">{payment.description || 'Maintenance fee payment'}</p>
-                      <p className="text-xs text-gray-500 capitalize mt-0.5">
-                        {payment.payment_method.replace('_', ' ')}
-                      </p>
-                    </td>
-                    <td className="px-6 py-3 text-right">
-                      <span className="font-semibold text-green-600">
-                        +{formatCurrency(payment.amount)}
-                      </span>
-                    </td>
+          
+          <div className="overflow-y-auto flex-1 p-0">
+            {unpaidDues.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                <div className="w-12 h-12 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-3">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <p className="text-gray-900 font-medium">All caught up!</p>
+                <p className="text-gray-500 text-sm mt-1">You have no outstanding dues.</p>
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-white sticky top-0 shadow-sm z-10">
+                  <tr className="text-xs text-gray-500 border-b border-gray-100">
+                    <th className="px-6 py-3 text-left">Month</th>
+                    <th className="px-6 py-3 text-right">Amount</th>
+                    <th className="px-6 py-3 text-right">Remaining</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {unpaidDues.map((due) => (
+                    <tr key={due.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3">
+                        <p className="font-medium text-gray-900">
+                          {format(new Date(due.month_date), 'MMMM yyyy')}
+                        </p>
+                        <span className={`text-xs px-2 py-0.5 rounded-full capitalize inline-block mt-1 ${
+                          due.status === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                        }`}>
+                          {due.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-3 text-right text-gray-500">
+                        {formatCurrency(Number(due.total_amount), due.currency_code)}
+                      </td>
+                      <td className="px-6 py-3 text-right font-bold text-red-600">
+                        {formatCurrency(Number(due.total_amount) - Number(due.paid_amount), due.currency_code)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
+        </div>
+
+        {/* RIGHT COLUMN: Payment History */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
+          <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
+            <h3 className="font-semibold text-gray-900 flex items-center">
+              <Receipt className="w-4 h-4 mr-2 text-gray-500" />
+              Payment History
+            </h3>
+          </div>
+          
+          <div className="overflow-y-auto flex-1 p-0">
+            {payments.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                <CreditCard className="w-12 h-12 text-gray-300 mb-3" />
+                <p className="text-gray-500">No payments recorded yet.</p>
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-white sticky top-0 shadow-sm z-10">
+                  <tr className="text-xs text-gray-500 border-b border-gray-100">
+                    <th className="px-6 py-3 text-left">Date</th>
+                    <th className="px-6 py-3 text-left">Detail</th>
+                    <th className="px-6 py-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {payments.map((payment) => (
+                    <tr key={payment.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-3">
+                        <p className="font-medium text-gray-900">
+                          {format(new Date(payment.payment_date), 'dd MMM yyyy')}
+                        </p>
+                      </td>
+                      <td className="px-6 py-3 text-gray-600">
+                        <p className="text-xs uppercase font-bold text-gray-400">
+                          {payment.payment_method.replace('_', ' ')}
+                        </p>
+                        {payment.reference_no && (
+                          <p className="text-xs font-mono mt-0.5">Ref: {payment.reference_no}</p>
+                        )}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        <span className="font-semibold text-green-600">
+                          +{formatCurrency(payment.amount, payment.currency_code)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
       </div>
     </div>
   );
