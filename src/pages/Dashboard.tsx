@@ -13,7 +13,7 @@ import {
   ChevronRight, Scale, MessageSquare, Home
 } from 'lucide-react';
 import { format } from 'date-fns';
-import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory } from '../types/database';
+import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
 export default function Dashboard() {
@@ -24,10 +24,13 @@ export default function Dashboard() {
   const [summary, setSummary] = useState<SiteFinancialSummary | null>(null);
   const [debtAlerts, setDebtAlerts] = useState<DebtAlert[]>([]);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
+  
+  // Updated State for Live Calculation
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]); // New State
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
 
-  // Operational Data State (NEW)
+  // Operational Data State
   const [opsStats, setOpsStats] = useState({
     openTickets: 0,
     occupiedUnits: 0,
@@ -77,22 +80,30 @@ export default function Dashboard() {
           .order('display_order');
         setBudgetCategories(categories || []);
 
-        // Ledger Data (Charts)
+        // Ledger Data (Charts & Calculations)
+        // Fetches ALL entries to calculate correct category totals
         const { data: ledgerData } = await supabase
           .from('ledger_entries')
-          .select('entry_date, amount, entry_type')
+          .select('*') // Need all fields for accurate sum
           .eq('site_id', currentSite.id)
           .eq('fiscal_period_id', periods.id)
           .order('entry_date');
 
+        setPeriodEntries(ledgerData || []);
+
+        // Prepare Monthly Chart Data
         const grouped: Record<string, { income: number; expense: number }> = {};
         ledgerData?.forEach(entry => {
           const month = format(new Date(entry.entry_date), 'MMM');
           if (!grouped[month]) grouped[month] = { income: 0, expense: 0 };
+          
+          // Use reported TRY amount for accurate charts
+          const amount = Number(entry.amount_reporting_try || entry.amount);
+          
           if (entry.entry_type === 'income') {
-            grouped[month].income += Number(entry.amount);
-          } else {
-            grouped[month].expense += Number(entry.amount);
+            grouped[month].income += amount;
+          } else if (entry.entry_type === 'expense') {
+            grouped[month].expense += amount;
           }
         });
         setMonthlyData(Object.entries(grouped).map(([month, data]) => ({
@@ -111,15 +122,13 @@ export default function Dashboard() {
         setDebtAlerts(alerts || []);
       }
 
-      // 3. Fetch Operational Stats (NEW)
-      // A. Open Tickets
+      // 3. Fetch Operational Stats
       const { count: ticketCount } = await supabase
         .from('support_tickets')
         .select('*', { count: 'exact', head: true })
         .eq('site_id', currentSite.id)
         .eq('status', 'open');
 
-      // B. Unit Occupancy
       const { data: units } = await supabase
         .from('units')
         .select('id, owner_id')
@@ -128,7 +137,6 @@ export default function Dashboard() {
       const totalUnits = units?.length || 0;
       const occupiedUnits = units?.filter(u => u.owner_id !== null).length || 0;
 
-      // C. Residents
       const { data: users } = await supabase
         .rpc('get_site_users', { p_site_id: currentSite.id });
 
@@ -157,10 +165,32 @@ export default function Dashboard() {
 
   const COLORS = ['#002561', '#0066cc', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
   
-  // Calculate Occupancy %
   const occupancyRate = opsStats.totalUnits > 0 
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
     : 0;
+
+  // --- LIVE DATA CALCULATION FOR CHARTS ---
+  // Calculates 'Actual' spending by summing ledger entries per category
+  const budgetData = budgetCategories.map((cat, idx) => {
+    const actualSpent = periodEntries
+      .filter(e => e.category === cat.category_name)
+      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+    return {
+      name: cat.category_name,
+      planned: Number(cat.planned_amount),
+      actual: actualSpent, // Use calculated value
+      color: COLORS[idx % COLORS.length],
+    };
+  });
+
+  const pieData = budgetData
+    .map(d => ({
+      name: d.name,
+      value: d.actual,
+      color: d.color
+    }))
+    .filter(d => d.value > 0);
 
   // --- RENDER ---
 
@@ -189,19 +219,6 @@ export default function Dashboard() {
     );
   }
 
-  const budgetData = budgetCategories.map((cat, idx) => ({
-    name: cat.category_name,
-    planned: Number(cat.planned_amount),
-    actual: Number(cat.actual_amount),
-    color: COLORS[idx % COLORS.length],
-  }));
-
-  const pieData = budgetCategories.map((cat, idx) => ({
-    name: cat.category_name,
-    value: Number(cat.actual_amount),
-    color: COLORS[idx % COLORS.length],
-  })).filter(d => d.value > 0);
-
   return (
     <div className="p-6 space-y-6">
       
@@ -220,7 +237,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* SECTION 1: Operational Overview (NEW) */}
+      {/* SECTION 1: Operational Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Link to="/tickets" className="block">
           <StatCard
@@ -249,7 +266,7 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      {/* SECTION 2: Financial Overview (EXISTING) */}
+      {/* SECTION 2: Financial Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
