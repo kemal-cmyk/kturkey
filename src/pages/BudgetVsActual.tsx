@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext'; // <--- Import this
 import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
@@ -16,6 +17,7 @@ interface ReportLine {
 
 export default function BudgetVsActual() {
   const { currentSite, currentRole } = useAuth();
+  const { hasPermission } = usePermissions(); // <--- Use the hook
   const [loading, setLoading] = useState(true);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
@@ -25,19 +27,23 @@ export default function BudgetVsActual() {
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
 
-  const canView = currentRole?.role === 'admin' || currentRole?.role === 'board_member';
+  // ✅ FIXED: Check dynamic permission instead of hardcoded roles
+  // We keep the admin check as a fallback, but rely on the permission system
+  const canView = currentRole?.role === 'admin' || hasPermission('/budget-vs-actual');
 
   useEffect(() => {
-    if (currentSite) {
+    if (currentSite && canView) {
       fetchFiscalPeriods();
+    } else {
+      setLoading(false);
     }
-  }, [currentSite]);
+  }, [currentSite, canView]);
 
   useEffect(() => {
-    if (selectedPeriodId) {
+    if (selectedPeriodId && canView) {
       fetchReportData();
     }
-  }, [selectedPeriodId]);
+  }, [selectedPeriodId, canView]);
 
   const fetchFiscalPeriods = async () => {
     if (!currentSite) return;
@@ -89,7 +95,7 @@ export default function BudgetVsActual() {
     const incomeEntries = entries.filter(e => e.entry_type === 'income');
     const expenseEntries = entries.filter(e => e.entry_type === 'expense');
 
-    const incomeData: ReportLine[] = INCOME_CATEGORIES.map((cat, index) => {
+    const incomeData: ReportLine[] = INCOME_CATEGORIES.map((cat) => {
       const actual = incomeEntries
         .filter(e => e.category === cat)
         .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -108,7 +114,7 @@ export default function BudgetVsActual() {
       };
     });
 
-    const expenseData: ReportLine[] = EXPENSE_CATEGORIES.map((cat, index) => {
+    const expenseData: ReportLine[] = EXPENSE_CATEGORIES.map((cat) => {
       const actual = expenseEntries
         .filter(e => e.category === cat)
         .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -157,13 +163,20 @@ export default function BudgetVsActual() {
     window.print();
   };
 
+  // ✅ Updated Access Denied View
   if (!canView) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center">
-          <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+        <div className="text-center p-8 bg-white rounded-xl shadow-sm border border-gray-100 max-w-md">
+          <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Access Restricted</h2>
-          <p className="text-gray-600">You need admin or board member access to view this report.</p>
+          <p className="text-gray-600 mb-4">
+            You do not have permission to view this financial report.
+          </p>
+          <div className="text-sm text-gray-500 bg-gray-50 p-3 rounded-lg">
+            Role: <span className="font-medium capitalize">{currentRole?.role.replace('_', ' ')}</span><br/>
+            Required Permission: Budget vs Actual
+          </div>
         </div>
       </div>
     );
