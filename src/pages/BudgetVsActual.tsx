@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { usePermissions } from '../contexts/PermissionsContext'; // Keep this
+import { usePermissions } from '../contexts/PermissionsContext';
 import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
@@ -18,18 +18,8 @@ interface ReportLine {
 export default function BudgetVsActual() {
   const { currentSite, currentRole } = useAuth();
   
-  // --- SAFETY CHECK START ---
-  // We get the entire context object to inspect it safely
-  const permContext = usePermissions();
-  
-  // We safely extract the function, or fallback to a dummy function if it's missing
-  const hasPermission = permContext && typeof permContext.hasPermission === 'function' 
-    ? permContext.hasPermission 
-    : (path: string) => {
-        console.warn(`Permission system warning: 'hasPermission' not found in context. Denying access to ${path}.`, permContext);
-        return false;
-      };
-  // --- SAFETY CHECK END ---
+  // Use the context correctly now
+  const { canAccess } = usePermissions(); 
 
   const [loading, setLoading] = useState(true);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
@@ -40,8 +30,8 @@ export default function BudgetVsActual() {
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
 
-  // Safe Access Check
-  const canView = currentRole?.role === 'admin' || hasPermission('/budget-vs-actual');
+  // ✅ FIXED: Use 'canAccess' instead of 'hasPermission'
+  const canView = currentRole?.role === 'admin' || (canAccess && canAccess('/budget-vs-actual'));
 
   useEffect(() => {
     // Only fetch if we have a site AND permission
