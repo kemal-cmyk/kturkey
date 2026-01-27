@@ -11,7 +11,7 @@ import { format } from 'date-fns';
 import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
-// Safe number helper
+// Safe number helper to prevent NaN errors
 const safeNumber = (val: any) => {
   const num = Number(val);
   return isNaN(num) ? 0 : num;
@@ -296,7 +296,6 @@ export default function Dashboard() {
             </div>
           </div>
         ) : (
-          /* Placeholder if no alerts - Keeps layout balanced */
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col justify-center items-center text-center">
              <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
                 <Receipt className="w-8 h-8 text-green-600" />
