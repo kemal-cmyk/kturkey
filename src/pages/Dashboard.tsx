@@ -3,32 +3,31 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
-  PieChart, Pie, Cell, ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  LineChart, Line, Legend,
-} from 'recharts';
-import {
   TrendingUp, TrendingDown, AlertTriangle, Users,
-  Building2, Calendar, Receipt, ArrowRight, Loader2,
-  ChevronRight, Scale, MessageSquare, Home
+  Building2, Receipt, ArrowRight, Loader2,
+  ChevronRight, Scale, MessageSquare, Home, Wallet
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
+// Safe number helper
+const safeNumber = (val: any) => {
+  const num = Number(val);
+  return isNaN(num) ? 0 : num;
+};
+
 export default function Dashboard() {
   const { currentSite, currentRole } = useAuth();
   const [loading, setLoading] = useState(true);
   
-  // Financial Data State
+  // Data States
   const [summary, setSummary] = useState<SiteFinancialSummary | null>(null);
   const [debtAlerts, setDebtAlerts] = useState<DebtAlert[]>([]);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
-  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]); // ✅ Added for Math Fix
-  const [monthlyData, setMonthlyData] = useState<any[]>([]);
+  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]);
 
-  // Operational Data State
   const [opsStats, setOpsStats] = useState({
     openTickets: 0,
     occupiedUnits: 0,
@@ -50,7 +49,7 @@ export default function Dashboard() {
     setLoading(true);
 
     try {
-      // 1. Fetch Active Period & Financials
+      // 1. Fetch Active Period
       const { data: periods } = await supabase
         .from('fiscal_periods')
         .select('*')
@@ -61,7 +60,7 @@ export default function Dashboard() {
       setActivePeriod(periods);
 
       if (periods) {
-        // Financial Summary
+        // 2. Fetch Financials
         const { data: summaryData } = await supabase
           .from('site_financial_summary')
           .select('*')
@@ -70,7 +69,7 @@ export default function Dashboard() {
           .maybeSingle();
         setSummary(summaryData);
 
-        // Budget Categories
+        // 3. Fetch Categories
         const { data: categories } = await supabase
           .from('budget_categories')
           .select('*')
@@ -78,36 +77,17 @@ export default function Dashboard() {
           .order('display_order');
         setBudgetCategories(categories || []);
 
-        // Ledger Data (Charts)
+        // 4. Fetch Ledger Entries (ALL columns needed for currency calc)
         const { data: ledgerData } = await supabase
           .from('ledger_entries')
-          .select('*') // ✅ Changed to select ALL columns for accurate math
+          .select('*')
           .eq('site_id', currentSite.id)
-          .eq('fiscal_period_id', periods.id)
-          .order('entry_date');
+          .eq('fiscal_period_id', periods.id);
 
         setPeriodEntries(ledgerData || []);
-
-        const grouped: Record<string, { income: number; expense: number }> = {};
-        ledgerData?.forEach(entry => {
-          const month = format(new Date(entry.entry_date), 'MMM');
-          if (!grouped[month]) grouped[month] = { income: 0, expense: 0 };
-          
-          // ✅ FIX: Use Reporting Amount (TL) for charts
-          const amount = Number(entry.amount_reporting_try || entry.amount);
-
-          if (entry.entry_type === 'income') {
-            grouped[month].income += amount;
-          } else {
-            grouped[month].expense += amount;
-          }
-        });
-        setMonthlyData(Object.entries(grouped).map(([month, data]) => ({
-          month, ...data,
-        })));
       }
 
-      // 2. Fetch Debt Alerts (Admin Only)
+      // 5. Fetch Debt Alerts
       if (isAdmin || isBoardMember) {
         const { data: alerts } = await supabase
           .from('debt_alerts')
@@ -118,7 +98,7 @@ export default function Dashboard() {
         setDebtAlerts(alerts || []);
       }
 
-      // 3. Fetch Operational Stats
+      // 6. Fetch Ops Stats
       const { count: ticketCount } = await supabase
         .from('support_tickets')
         .select('*', { count: 'exact', head: true })
@@ -130,21 +110,18 @@ export default function Dashboard() {
         .select('id, owner_id')
         .eq('site_id', currentSite.id);
       
-      const totalUnits = units?.length || 0;
-      const occupiedUnits = units?.filter(u => u.owner_id !== null).length || 0;
-
       const { data: users } = await supabase
         .rpc('get_site_users', { p_site_id: currentSite.id });
 
       setOpsStats({
         openTickets: ticketCount || 0,
-        totalUnits,
-        occupiedUnits,
+        totalUnits: units?.length || 0,
+        occupiedUnits: units?.filter(u => u.owner_id).length || 0,
         totalResidents: users ? users.length : 0
       });
 
     } catch (error) {
-      console.error('Error fetching dashboard data:', error);
+      console.error('Error fetching dashboard:', error);
     } finally {
       setLoading(false);
     }
@@ -156,61 +133,32 @@ export default function Dashboard() {
       currency: 'TRY',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
-    }).format(amount);
+    }).format(safeNumber(amount));
   };
 
-  const COLORS = ['#002561', '#0066cc', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
-  
   const occupancyRate = opsStats.totalUnits > 0 
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
     : 0;
 
-  // --- RENDER ---
-
-  if (!currentSite) {
-    return (
-      <div className="p-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
-          <Building2 className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">No Site Selected</h2>
-          <p className="text-gray-600 mb-6">Please select a site from the sidebar or create a new one.</p>
-          {isAdmin && (
-            <Link to="/sites/new" className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors">
-              Add New Site <ArrowRight className="w-4 h-4 ml-2" />
-            </Link>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="p-6 flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-[#002561]" />
-      </div>
-    );
-  }
-
-  // ✅ FIX: Calculate budget data live from ledger entries
-  const budgetData = budgetCategories.map((cat, idx) => {
+  // Calculate Budget Data (Smart Math: Sums TL + EUR properly)
+  const budgetData = budgetCategories.map((cat) => {
     const actualSpent = periodEntries
       .filter(e => e.category === cat.category_name)
-      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+      .reduce((sum, e) => sum + safeNumber(e.amount_reporting_try || e.amount), 0);
+    
+    const planned = safeNumber(cat.planned_amount);
+    const percent = planned > 0 ? (actualSpent / planned) * 100 : 0;
 
     return {
       name: cat.category_name,
-      planned: Number(cat.planned_amount),
+      planned,
       actual: actualSpent,
-      color: COLORS[idx % COLORS.length],
+      percent: Math.min(percent, 100)
     };
-  });
+  }).sort((a, b) => b.percent - a.percent); 
 
-  const pieData = budgetData.map((data, idx) => ({
-    name: data.name,
-    value: data.actual,
-    color: COLORS[idx % COLORS.length],
-  })).filter(d => d.value > 0);
+  if (!currentSite) return null;
+  if (loading) return <div className="p-6 flex justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#002561]" /></div>;
 
   return (
     <div className="p-6 space-y-6">
@@ -230,173 +178,140 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* SECTION 1: Operational Overview */}
+      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Link to="/tickets" className="block">
-          <StatCard
-            title="Open Tickets"
-            value={String(opsStats.openTickets)}
-            subtitle="Action Needed"
-            icon={<MessageSquare className="w-5 h-5" />}
-            color={opsStats.openTickets > 0 ? "bg-red-500" : "bg-blue-500"}
-          />
-        </Link>
-        <StatCard
-          title="Occupancy Rate"
-          value={`${occupancyRate}%`}
-          subtitle={`${opsStats.occupiedUnits} / ${opsStats.totalUnits} Units Occupied`}
-          icon={<Home className="w-5 h-5" />}
-          color="bg-purple-500"
+        <StatCard 
+          title="Total Budget" 
+          value={formatCurrency(summary?.total_budget || 0)} 
+          icon={<Receipt className="w-5 h-5" />} 
+          color="bg-[#002561]" 
         />
-        <Link to="/users" className="block">
-          <StatCard
-            title="Total Residents"
-            value={String(opsStats.totalResidents)}
-            subtitle="Registered Users"
-            icon={<Users className="w-5 h-5" />}
-            color="bg-indigo-500"
-          />
-        </Link>
-      </div>
-
-      {/* SECTION 2: Financial Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard
-          title="Total Budget"
-          value={formatCurrency(summary?.total_budget || 0)}
-          icon={<Receipt className="w-5 h-5" />}
-          color="bg-[#002561]"
+        <StatCard 
+          title="Total Collected" 
+          value={formatCurrency(summary?.total_collected || 0)} 
+          subtitle={`${summary?.collection_rate || 0}% collection rate`} 
+          icon={<TrendingUp className="w-5 h-5" />} 
+          color="bg-green-600" 
         />
-        <StatCard
-          title="Total Collected"
-          value={formatCurrency(summary?.total_collected || 0)}
-          subtitle={`${summary?.collection_rate || 0}% collection rate`}
-          icon={<TrendingUp className="w-5 h-5" />}
-          color="bg-green-600"
-        />
-        <StatCard
-          title="Total Spent"
-          value={formatCurrency(summary?.actual_expenses || 0)}
-          subtitle={`${summary?.budget_utilization || 0}% of budget`}
-          icon={<TrendingDown className="w-5 h-5" />}
-          color="bg-orange-500"
+        <StatCard 
+          title="Total Spent" 
+          value={formatCurrency(summary?.actual_expenses || 0)} 
+          subtitle={`${summary?.budget_utilization || 0}% of budget`} 
+          icon={<TrendingDown className="w-5 h-5" />} 
+          color="bg-orange-500" 
         />
       </div>
 
-      {/* SECTION 3: Charts & Alerts */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <StatCard 
+          title="Open Tickets" 
+          value={String(opsStats.openTickets)} 
+          subtitle="Action Needed" 
+          icon={<MessageSquare className="w-5 h-5" />} 
+          color={opsStats.openTickets > 0 ? "bg-red-500" : "bg-blue-500"} 
+        />
+        <StatCard 
+          title="Occupancy Rate" 
+          value={`${occupancyRate}%`} 
+          subtitle={`${opsStats.occupiedUnits}/${opsStats.totalUnits} Units`} 
+          icon={<Home className="w-5 h-5" />} 
+          color="bg-purple-500" 
+        />
+        <StatCard 
+          title="Residents" 
+          value={String(opsStats.totalResidents)} 
+          subtitle="Registered" 
+          icon={<Users className="w-5 h-5" />} 
+          color="bg-indigo-500" 
+        />
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
-        {/* Budget Bar Chart */}
+        {/* Budget Utilization List (Replaces Crashy Chart) */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Budget Utilization</h3>
+          <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            <Wallet className="w-5 h-5 text-gray-500" />
+            Budget Utilization
+          </h3>
           {budgetData.length > 0 ? (
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={budgetData} layout="vertical" margin={{ left: 80 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
-                  <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={75} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
-                  <Legend />
-                  <Bar dataKey="planned" name="Planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
-                  <Bar dataKey="actual" name="Actual" fill="#002561" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="space-y-4 max-h-[350px] overflow-y-auto pr-2">
+              {budgetData.map((item, idx) => (
+                <div key={idx}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="font-medium text-gray-700">{item.name}</span>
+                    <span className="text-gray-500">
+                      {formatCurrency(item.actual)} / {formatCurrency(item.planned)}
+                    </span>
+                  </div>
+                  <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        item.percent > 100 ? 'bg-red-500' : 
+                        item.percent > 80 ? 'bg-orange-500' : 'bg-[#002561]'
+                      }`}
+                      style={{ width: `${item.percent}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">No budget data available</div>
+            <div className="h-[200px] flex items-center justify-center text-gray-500">No budget data</div>
           )}
         </div>
 
-        {/* Expense Pie Chart */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Expense Distribution</h3>
-          {pieData.length > 0 ? (
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2} dataKey="value">
-                    {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
-                  </Pie>
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
-                  <Legend layout="vertical" align="right" verticalAlign="middle" />
-                </PieChart>
-              </ResponsiveContainer>
+        {/* Debt Alerts */}
+        {(isAdmin || isBoardMember) && debtAlerts.length > 0 ? (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-orange-500" />
+                Debt Alerts
+              </h3>
+              <Link to="/debt-tracking" className="text-[#002561] hover:underline text-sm font-medium flex items-center">
+                View All <ChevronRight className="w-4 h-4 ml-1" />
+              </Link>
             </div>
-          ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">No expense data available</div>
-          )}
-        </div>
+            <div className="divide-y divide-gray-100">
+              {debtAlerts.slice(0, 5).map((alert) => (
+                <div key={alert.workflow_id} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50">
+                  <div className="flex items-center space-x-4">
+                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${alert.stage === 4 ? 'bg-red-100' : 'bg-yellow-100'}`}>
+                      {alert.stage === 4 ? <Scale className="w-5 h-5 text-red-600" /> : <AlertTriangle className="w-5 h-5 text-orange-600" />}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">{alert.block ? `${alert.block}-` : ''}{alert.unit_number}</p>
+                      <p className="text-sm text-gray-500">{alert.owner_name || 'Unknown'}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold text-gray-900">{formatCurrency(alert.total_debt_amount)}</p>
+                    <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${DEBT_STAGES[alert.stage as keyof typeof DEBT_STAGES].color}`}>
+                      {DEBT_STAGES[alert.stage as keyof typeof DEBT_STAGES].name}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          /* Placeholder if no alerts - Keeps layout balanced */
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col justify-center items-center text-center">
+             <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mb-4">
+                <Receipt className="w-8 h-8 text-green-600" />
+             </div>
+             <h3 className="text-lg font-bold text-gray-900">Financial Status</h3>
+             <p className="text-gray-500 mt-2">All systems running smoothly. No critical debt alerts.</p>
+          </div>
+        )}
+
       </div>
-
-      {/* Monthly Cash Flow */}
-      {monthlyData.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">Monthly Cash Flow</h3>
-          <div className="h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={monthlyData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="month" />
-                <YAxis tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
-                <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
-                <Legend />
-                <Line type="monotone" dataKey="income" name="Income" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981' }} />
-                <Line type="monotone" dataKey="expense" name="Expenses" stroke="#ef4444" strokeWidth={2} dot={{ fill: '#ef4444' }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* Debt Alerts */}
-      {(isAdmin || isBoardMember) && debtAlerts.length > 0 && (
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <AlertTriangle className="w-5 h-5 text-orange-500" />
-              <h3 className="text-lg font-semibold text-gray-900">Debt Alerts</h3>
-            </div>
-            <Link to="/debt-tracking" className="text-[#002561] hover:underline text-sm font-medium flex items-center">
-              View All <ChevronRight className="w-4 h-4 ml-1" />
-            </Link>
-          </div>
-          <div className="divide-y divide-gray-100">
-            {debtAlerts.slice(0, 5).map((alert) => (
-              <div key={alert.workflow_id} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50">
-                <div className="flex items-center space-x-4">
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${alert.stage === 4 ? 'bg-red-100' : alert.stage === 3 ? 'bg-orange-100' : 'bg-yellow-100'}`}>
-                    {alert.stage === 4 ? <Scale className="w-5 h-5 text-red-600" /> : <AlertTriangle className={`w-5 h-5 ${alert.stage === 3 ? 'text-orange-600' : 'text-yellow-600'}`} />}
-                  </div>
-                  <div>
-                    <p className="font-medium text-gray-900">{alert.block ? `${alert.block}-` : ''}{alert.unit_number}</p>
-                    <p className="text-sm text-gray-500">{alert.owner_name || 'Unknown Owner'}</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="font-semibold text-gray-900">{formatCurrency(alert.total_debt_amount)}</p>
-                  <span className={`inline-block px-2 py-0.5 text-xs rounded-full ${DEBT_STAGES[alert.stage as keyof typeof DEBT_STAGES].color}`}>
-                    {DEBT_STAGES[alert.stage as keyof typeof DEBT_STAGES].name}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-interface StatCardProps {
-  title: string;
-  value: string;
-  subtitle?: string;
-  icon: React.ReactNode;
-  color: string;
-}
-
-function StatCard({ title, value, subtitle, icon, color }: StatCardProps) {
+function StatCard({ title, value, subtitle, icon, color }: any) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 h-full transition-shadow hover:shadow-md">
       <div className="flex items-center justify-between mb-4">
