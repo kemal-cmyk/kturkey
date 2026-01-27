@@ -15,6 +15,7 @@ interface RequestBody {
   unit_ids?: string[];
   user_id?: string;
   deactivated?: boolean;
+  password?: string; // <--- NEW FIELD
 }
 
 Deno.serve(async (req: Request) => {
@@ -74,14 +75,27 @@ Deno.serve(async (req: Request) => {
         const { data: authUser } = await adminClient.schema('auth').from('users').select('id,email').eq('email', body.email).maybeSingle();
         let userId = authUser?.id;
 
-        // 2. Invite if new
+        // 2. Create or Invite
         if (!userId) {
-          const { data: invite, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(body.email, { data: { full_name: body.full_name } });
-          if (inviteError) throw inviteError;
-          userId = invite.user.id;
+          if (body.password && body.password.length >= 6) {
+             // A. Manual Creation (Admin sets password) - Auto Confirm
+             const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
+               email: body.email,
+               password: body.password,
+               email_confirm: true, // User is ready to login immediately
+               user_metadata: { full_name: body.full_name }
+             });
+             if (createError) throw createError;
+             userId = newUser.user.id;
+          } else {
+             // B. Standard Invite (Magic Link)
+             const { data: invite, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(body.email, { data: { full_name: body.full_name } });
+             if (inviteError) throw inviteError;
+             userId = invite.user.id;
+          }
         }
 
-        // 3. Assign Role (Upsert to handle re-invites safely)
+        // 3. Assign Role (Upsert)
         const { error: roleError } = await adminClient
           .from('user_site_roles')
           .upsert({ user_id: userId, site_id: body.site_id, role: body.role, is_active: true }, { onConflict: 'user_id,site_id' });
@@ -89,7 +103,6 @@ Deno.serve(async (req: Request) => {
 
         // 4. Assign Units (if Homeowner)
         if (['homeowner', 'resident'].includes(body.role!) && body.unit_ids?.length) {
-          // Clear previous owner for these units
           await adminClient.from('units').update({ owner_id: userId }).in('id', body.unit_ids).eq('site_id', body.site_id);
         }
 
@@ -99,7 +112,15 @@ Deno.serve(async (req: Request) => {
       case 'update_user': {
         if (!body.user_id) throw new Error('User ID required');
 
-        // 1. Update Role
+        // 1. Update Password (if provided)
+        if (body.password && body.password.length >= 6) {
+           const { error: pwdError } = await adminClient.auth.admin.updateUserById(body.user_id, {
+             password: body.password
+           });
+           if (pwdError) throw pwdError;
+        }
+
+        // 2. Update Role
         const { error: roleError } = await adminClient
           .from('user_site_roles')
           .update({ role: body.role })
@@ -107,7 +128,7 @@ Deno.serve(async (req: Request) => {
           .eq('site_id', body.site_id);
         if (roleError) throw roleError;
 
-        // 2. Handle Units (Clear all first, then set new ones if Homeowner)
+        // 3. Handle Units
         await adminClient.from('units').update({ owner_id: null }).eq('owner_id', body.user_id).eq('site_id', body.site_id);
         
         if (['homeowner', 'resident'].includes(body.role!) && body.unit_ids?.length) {
@@ -119,37 +140,28 @@ Deno.serve(async (req: Request) => {
 
       case 'deactivate_user': {
         if (!body.user_id) throw new Error('User ID required');
-        // Toggle the is_active status
         const { error } = await adminClient
           .from('user_site_roles')
           .update({ is_active: !body.deactivated })
           .eq('user_id', body.user_id)
           .eq('site_id', body.site_id);
         if (error) throw error;
-
         return new Response(JSON.stringify({ success: true }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
       case 'delete_user': {
          if (!body.user_id) throw new Error('User ID required');
-
-         // 1. Unassign any units owned by this user
          await adminClient
            .from('units')
            .update({ owner_id: null, owner_name: null, owner_email: null })
            .eq('owner_id', body.user_id)
            .eq('site_id', body.site_id);
-
-         // 2. Remove the role entry (This effectively removes them from the site)
          const { error: deleteError } = await adminClient
            .from('user_site_roles')
            .delete()
            .eq('user_id', body.user_id)
            .eq('site_id', body.site_id);
-         
          if (deleteError) throw deleteError;
-
-         // Note: We do NOT delete from auth.users because they might belong to other sites
          return new Response(JSON.stringify({ success: true, message: 'User removed from site' }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
 
