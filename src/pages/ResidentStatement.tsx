@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { useSearchParams } from 'react-router-dom';
-import {
-  FileText, Search, Printer, Loader2,
+import { 
+  FileText, Search, Printer, Loader2, 
   TrendingUp, TrendingDown, Wallet, Calendar,
   Building2, Phone, User
 } from 'lucide-react';
@@ -15,10 +15,10 @@ interface StatementItem {
   date: string;
   type: 'due' | 'payment';
   description: string;
-  amount_accrued: number; // In Dues Currency
-  amount_paid: number;    // In Dues Currency (Converted if necessary)
-  original_amount?: number; // Original payment amount (e.g. in TRY)
-  original_currency?: string; // Original payment currency
+  amount_accrued: number; // Debt (Borç)
+  amount_paid: number;    // Credit (Alacak)
+  original_amount?: number; 
+  original_currency?: string; 
   running_balance: number;
   currency_code: string;
 }
@@ -39,7 +39,7 @@ export default function ResidentStatement() {
   const [loading, setLoading] = useState(false);
   const [units, setUnits] = useState<Unit[]>([]);
   const [selectedUnitId, setSelectedUnitId] = useState<string>('');
-
+  
   // Ledger Data
   const [statementData, setStatementData] = useState<StatementItem[]>([]);
   
@@ -49,15 +49,13 @@ export default function ResidentStatement() {
     totalDues: 0,
     totalPaid: 0,
     endingBalance: 0,
-    currency: 'TRY' // Default, will update based on unit
+    currency: 'TRY' // Default
   });
 
-  // 1. Load Units List
   useEffect(() => {
     if (currentSite) fetchUnits();
   }, [currentSite]);
 
-  // 2. Auto-select unit from URL
   useEffect(() => {
     const unitFromUrl = searchParams.get('unit_id');
     if (unitFromUrl && units.length > 0) {
@@ -65,7 +63,6 @@ export default function ResidentStatement() {
     }
   }, [searchParams, units]);
 
-  // 3. Fetch Data when Unit is selected
   useEffect(() => {
     if (selectedUnitId) fetchStatementData(selectedUnitId);
   }, [selectedUnitId]);
@@ -83,33 +80,44 @@ export default function ResidentStatement() {
   const fetchStatementData = async (unitId: string) => {
     setLoading(true);
     try {
-      // 1. Get Unit Info (Opening Balance)
       const unit = units.find(u => u.id === unitId);
       const openingBalance = unit?.opening_balance || 0;
 
-      // 2. Get Dues (The "Charges")
-      // This table contains the correct currency and paid amounts
+      // 1. Get Dues (DEBTS) - Directly linked to Unit
       const { data: dues } = await supabase
         .from('dues')
         .select('*')
         .eq('unit_id', unitId)
         .order('month_date');
 
-      // 3. Get Actual Payments (The "Credits")
-      // We fetch these to show the history, but the math relies on what was applied to dues
-      const { data: payments } = await supabase
+      // 2. Get Payments (CREDITS) - Step 1: Get IDs
+      const { data: paymentIdsData } = await supabase
         .from('payments')
-        .select('*')
-        .eq('unit_id', unitId)
-        .order('payment_date');
+        .select('id')
+        .eq('unit_id', unitId);
 
-      // Determine Base Currency from the first due or default to site default
+      const paymentIds = paymentIdsData?.map(p => p.id) || [];
+
+      // 3. Get Ledger Entries - Step 2: Filter by Payment IDs
+      // This matches your Units.tsx logic exactly to prevent showing all incomes
+      let ledgerEntries: any[] = [];
+      if (paymentIds.length > 0) {
+        const { data: ledger } = await supabase
+          .from('ledger_entries')
+          .select('*')
+          .in('payment_id', paymentIds) // <--- CRITICAL FILTER
+          .eq('entry_type', 'income')
+          .order('entry_date');
+        ledgerEntries = ledger || [];
+      }
+
+      // Determine Base Currency (Default to first Due's currency or Site Default)
       const baseCurrency = dues?.[0]?.currency_code || currentSite?.default_currency || 'TRY';
 
-      // --- MERGE & CALCULATE ---
+      // --- MERGE ---
       const combined: StatementItem[] = [];
 
-      // A. Add Dues (Charges)
+      // A. Add Dues
       dues?.forEach(d => {
         combined.push({
           id: d.id,
@@ -123,62 +131,48 @@ export default function ResidentStatement() {
         });
       });
 
-      /* B. Add Payments (Credits)
-         CRITICAL: We must link payments to the dues they paid or show them chronologically.
-         For a simple statement, we can just list payments.
-         However, because of cross-currency, we need to be careful.
-         
-         If a payment was made in TRY for EUR dues, we should show the converted amount
-         that effectively reduced the debt.
-         
-         Since your `apply_unit_payment` function calculates `amount_reporting_try` 
-         or converts to dues currency, we can try to infer the "Effective Amount"
-         based on the exchange rate stored in the payment.
-      */
-      
-      payments?.forEach(p => {
-        // Calculate the "Effective Credit" in the Base Currency
-        let effectiveAmount = Number(p.amount);
+      // B. Add Ledger Incomes (Linked to Unit Payments)
+      ledgerEntries.forEach(entry => {
+        // We use the amount from the ledger entry directly as it usually reflects the transaction
+        let effectiveAmount = Number(entry.amount);
         
-        if (p.currency_code !== baseCurrency) {
-           // If Payment is TRY and Base is EUR
-           if (p.currency_code === 'TRY' && baseCurrency !== 'TRY') {
-              effectiveAmount = Number(p.amount) / Number(p.exchange_rate || 1);
+        // Handle Currency Conversion for Display
+        // If the Ledger Entry is in a different currency than the Base Statement Currency
+        if (entry.currency_code !== baseCurrency) {
+           if (entry.currency_code === 'TRY' && baseCurrency !== 'TRY') {
+              effectiveAmount = Number(entry.amount) / Number(entry.exchange_rate || 1);
            } 
-           // If Payment is EUR and Base is TRY
-           else if (p.currency_code !== 'TRY' && baseCurrency === 'TRY') {
-              effectiveAmount = Number(p.amount) * Number(p.exchange_rate || 1);
+           else if (entry.currency_code !== 'TRY' && baseCurrency === 'TRY') {
+              effectiveAmount = Number(entry.amount) * Number(entry.exchange_rate || 1);
            }
         }
 
         combined.push({
-          id: p.id,
-          date: p.payment_date,
+          id: entry.id,
+          date: entry.entry_date,
           type: 'payment',
-          description: p.description 
-            ? `Payment: ${p.description}` 
-            : `Payment (${p.payment_method?.replace('_', ' ')})`,
+          description: entry.description || 'Payment Received',
           amount_accrued: 0,
-          amount_paid: effectiveAmount, // The amount that reduces the balance in Base Currency
-          original_amount: Number(p.amount),
-          original_currency: p.currency_code,
+          amount_paid: effectiveAmount,
+          original_amount: Number(entry.amount),
+          original_currency: entry.currency_code,
           running_balance: 0,
           currency_code: baseCurrency
         });
       });
 
-      // Sort Chronologically
+      // Sort by Date
       combined.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      // C. Calculate Running Balance
+      // Calculate Running Balance
       let running = openingBalance;
-      let sumAccrued = 0;
+      let sumDues = 0;
       let sumPaid = 0;
 
       const calculatedData = combined.map(item => {
         if (item.type === 'due') {
           running += item.amount_accrued;
-          sumAccrued += item.amount_accrued;
+          sumDues += item.amount_accrued;
         } else {
           running -= item.amount_paid;
           sumPaid += item.amount_paid;
@@ -189,7 +183,7 @@ export default function ResidentStatement() {
       setStatementData(calculatedData);
       setSummary({
         openingBalance: openingBalance,
-        totalDues: sumAccrued,
+        totalDues: sumDues,
         totalPaid: sumPaid,
         endingBalance: running,
         currency: baseCurrency
@@ -356,10 +350,9 @@ export default function ResidentStatement() {
                         <td className="px-6 py-2.5 text-gray-800 border-r">
                           <div className="flex flex-col">
                             <span>{item.description}</span>
-                            {/* Show original currency if different from base */}
                             {item.original_amount && item.original_currency !== summary.currency && (
                               <span className="text-xs text-gray-500 italic">
-                                (Orig: {formatCurrency(item.original_amount, item.original_currency)})
+                                (Paid: {formatCurrency(item.original_amount, item.original_currency)})
                               </span>
                             )}
                           </div>
@@ -377,7 +370,7 @@ export default function ResidentStatement() {
                     ))}
                     
                     <tr className="bg-gray-100 font-bold border-t-2 border-gray-300 print:bg-gray-200 print:border-black">
-                       <td className="px-6 py-4 text-right border-r border-gray-300" colSpan={2}>ENDING TOTALS</td>
+                       <td className="px-6 py-4 text-right border-r border-gray-300" colSpan={2}>TOTALS</td>
                        <td className="px-6 py-4 text-right text-red-700 border-r border-gray-300">{formatCurrency(summary.totalDues, summary.currency)}</td>
                        <td className="px-6 py-4 text-right text-green-700 border-r border-gray-300">{formatCurrency(summary.totalPaid, summary.currency)}</td>
                        <td className={`px-6 py-4 text-right text-lg border-r border-gray-300 ${summary.endingBalance > 0 ? 'text-red-700' : 'text-green-700'}`}>
