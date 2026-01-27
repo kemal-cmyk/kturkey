@@ -112,18 +112,14 @@ export default function Ledger() {
   const fetchEntries = async () => {
     if (!currentSite) return;
 
+    // Use ASCENDING order for calculations, we reverse for display later
     const { data } = await supabase
       .from('ledger_entries')
       .select('*')
       .eq('site_id', currentSite.id)
-      .order('entry_date', { ascending: true }); // Fetch ASCENDING for correct balance calculation
+      .order('entry_date', { ascending: true }); 
 
     if (selectedPeriod && data) {
-      // We need ALL entries to calculate balances correctly, filtering happens LATER for display
-      // But for now, we filter by period to keep the dataset manageable if that's the intent
-      // However, true ledger balance needs previous periods too. 
-      // For this view, we will calculate based on what we fetch.
-      
       const filtered = data.filter(entry =>
         entry.fiscal_period_id === selectedPeriod ||
         (entry.entry_type === 'transfer' && entry.fiscal_period_id === null)
@@ -193,7 +189,6 @@ export default function Ledger() {
     }).format(amount);
   };
 
-  // ... [Add Entry Logic is fine, keeping it same] ...
   const handleAddEntry = async () => {
     if (!currentSite || !user) return;
 
@@ -326,7 +321,6 @@ export default function Ledger() {
     await fetchData();
   };
 
-  // ... [Account handling logic same] ...
   const handleSaveAccount = async (accountData: Partial<Account>) => {
     if (!currentSite) return;
 
@@ -357,37 +351,29 @@ export default function Ledger() {
     await fetchData();
   };
 
-  // --- REVISED BALANCE CALCULATION LOGIC ---
-  // 1. First, sort ALL entries chronologically
-  // 2. Calculate running balances on the FULL dataset
-  // 3. THEN filter for display
-
+  // --- BALANCE CALCULATION START ---
+  
+  // 1. Ensure Chronological Order
   const sortedAllEntries = [...entries].sort(
     (a, b) => new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime()
   );
 
-  // Map to store running balance for each account
+  // 2. Initialize Running Balances
   const accountBalances: Record<string, number> = {};
-  
-  // Initialize with account initial balances
   accounts.forEach(acc => {
     accountBalances[acc.id] = Number(acc.initial_balance);
   });
 
-  // Global total balance tracker
+  // Calculate Global Total
   let currentTotalBalance = accounts.reduce((sum, acc) => sum + Number(acc.initial_balance), 0);
 
-  // Calculate balances for EVERY entry first
+  // 3. Process ALL entries to build state
   const entriesWithCalculatedBalances = sortedAllEntries.map(entry => {
     const amountTry = Number(entry.amount_reporting_try || entry.amount);
-    
-    // Update Account Balance
     let entryAccountBalance = 0;
     
     if (entry.entry_type === 'transfer') {
-        // Transfers don't change TOTAL balance, but they change Account balances (complex logic omitted for simplicity here unless we track from/to in entry)
-        // Since transfers in your schema might be separate entries or paired, we'll skip detailed transfer balance logic for now to keep it safe
-        // Ideally, transfers should have from_account_id and to_account_id columns on the entry if they are single row, or be paired rows.
+        // Simple placeholder for transfer logic
         entryAccountBalance = 0; 
     } else {
         if (entry.account_id) {
@@ -396,19 +382,17 @@ export default function Ledger() {
             accountBalances[entry.account_id] = newAccBalance;
             entryAccountBalance = newAccBalance;
         }
-        
-        // Update Total Balance
         currentTotalBalance = currentTotalBalance + (entry.entry_type === 'income' ? amountTry : -amountTry);
     }
 
     return {
       ...entry,
-      accountBalance: entryAccountBalance, // Balance of the SPECIFIC account after this txn
-      totalBalance: currentTotalBalance,   // Total cash in ALL accounts after this txn
+      accountBalance: entryAccountBalance,
+      totalBalance: currentTotalBalance,
     };
   });
 
-  // NOW filter for display based on user selection
+  // 4. NOW Filter for display
   const filteredEntriesWithBalance = entriesWithCalculatedBalances.filter(entry => {
     const matchesType = typeFilter === 'all' || entry.entry_type === typeFilter;
     const matchesSearch =
@@ -419,7 +403,6 @@ export default function Ledger() {
     return matchesType && matchesSearch;
   });
 
-  // Calculate Totals for the Summary Cards (Income/Expense over current period)
   const totals = filteredEntriesWithBalance.reduce(
     (acc, entry) => {
       const amountTry = Number(entry.amount_reporting_try || entry.amount);
@@ -433,13 +416,11 @@ export default function Ledger() {
     { income: 0, expense: 0 }
   );
 
-  // Net Balance for current period view (distinct from Total Balance)
-  const netPeriodChange = totals.income - totals.expense;
-
-  // Sort Descending for Table View (Newest First)
   const displayEntries = [...filteredEntriesWithBalance].sort(
     (a, b) => new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime()
   );
+
+  // --- BALANCE CALCULATION END ---
 
   const selectedAccount = accounts.find(a => a.id === newEntry.account_id);
   const accountCurrency = selectedAccount?.currency_code || currentSite?.default_currency || 'TRY';
@@ -459,7 +440,6 @@ export default function Ledger() {
 
   return (
     <div className="p-6 space-y-6">
-      {/* ... [Header and Buttons same as before] ... */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Ledger</h1>
@@ -593,7 +573,6 @@ export default function Ledger() {
         </div>
       </div>
 
-      {/* ... [Search and Filters same] ... */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
@@ -643,114 +622,39 @@ export default function Ledger() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">
-                  Date
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">
-                  Account
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">
-                  Category
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  Description
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-red-600 uppercase w-28">
-                  Debit
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase w-28">
-                  Credit
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">
-                  Acc. Balance
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">
-                  Total Balance
-                </th>
-                {isAdmin && (
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">
-                    Actions
-                  </th>
-                )}
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">Date</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Account</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Category</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-red-600 uppercase w-28">Debit</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase w-28">Credit</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Acc. Balance</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Total Balance</th>
+                {isAdmin && <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {/* ... [Input row same as before] ... */}
               {isAdmin && (
                 <>
                   <tr className="bg-blue-50/50">
                     <td className="px-4 py-2" colSpan={9}>
                       <div className="flex flex-wrap items-center gap-4">
                         <div className="flex gap-2">
-                          <button
-                            onClick={() => setNewEntry({ ...newEntry, entry_type: 'expense', category: budgetCategories[0]?.category_name || '', from_account_id: '', to_account_id: '' })}
-                            className={`px-4 py-1.5 text-sm rounded font-medium ${
-                              newEntry.entry_type === 'expense' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-600'
-                            }`}
-                          >
-                            Expense
-                          </button>
-                          <button
-                            onClick={() => setNewEntry({ ...newEntry, entry_type: 'income', category: budgetCategories[0]?.category_name || '', from_account_id: '', to_account_id: '' })}
-                            className={`px-4 py-1.5 text-sm rounded font-medium ${
-                              newEntry.entry_type === 'income' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'
-                            }`}
-                          >
-                            Income
-                          </button>
-                          <button
-                            onClick={() => setNewEntry({ ...newEntry, entry_type: 'transfer', category: '', account_id: '', currency_code: 'TRY', exchange_rate: '1' })}
-                            className={`px-4 py-1.5 text-sm rounded font-medium ${
-                              newEntry.entry_type === 'transfer' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'
-                            }`}
-                          >
-                            Transfer
-                          </button>
+                          <button onClick={() => setNewEntry({ ...newEntry, entry_type: 'expense', category: budgetCategories[0]?.category_name || '', from_account_id: '', to_account_id: '' })} className={`px-4 py-1.5 text-sm rounded font-medium ${newEntry.entry_type === 'expense' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-600'}`}>Expense</button>
+                          <button onClick={() => setNewEntry({ ...newEntry, entry_type: 'income', category: budgetCategories[0]?.category_name || '', from_account_id: '', to_account_id: '' })} className={`px-4 py-1.5 text-sm rounded font-medium ${newEntry.entry_type === 'income' ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'}`}>Income</button>
+                          <button onClick={() => setNewEntry({ ...newEntry, entry_type: 'transfer', category: '', account_id: '', currency_code: 'TRY', exchange_rate: '1' })} className={`px-4 py-1.5 text-sm rounded font-medium ${newEntry.entry_type === 'transfer' ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'}`}>Transfer</button>
                         </div>
-                        {/* ... [Rest of Input Fields] ... */}
-                        {/* Copy the rest of the Input Row logic from previous code here, it was correct */}
                         {newEntry.entry_type !== 'transfer' && (
                           <div className="flex items-center gap-2 ml-auto">
                             <label className="text-sm font-medium text-gray-600">Currency:</label>
-                            <select
-                              value={newEntry.currency_code}
-                              onChange={(e) => setNewEntry({
-                                ...newEntry,
-                                currency_code: e.target.value,
-                                exchange_rate: e.target.value === 'TRY' ? '1' : newEntry.exchange_rate
-                              })}
-                              className={`px-3 py-1.5 text-sm border rounded focus:ring-2 focus:ring-[#002561] bg-white ${
-                                hasCurrencyMismatch ? 'border-orange-400 bg-orange-50' : 'border-gray-300'
-                              }`}
-                            >
-                              {SUPPORTED_CURRENCIES.map(curr => (
-                                <option key={curr.code} value={curr.code}>
-                                  {curr.symbol} {curr.code}
-                                </option>
-                              ))}
+                            <select value={newEntry.currency_code} onChange={(e) => setNewEntry({ ...newEntry, currency_code: e.target.value, exchange_rate: e.target.value === 'TRY' ? '1' : newEntry.exchange_rate })} className={`px-3 py-1.5 text-sm border rounded focus:ring-2 focus:ring-[#002561] bg-white ${hasCurrencyMismatch ? 'border-orange-400 bg-orange-50' : 'border-gray-300'}`}>
+                              {SUPPORTED_CURRENCIES.map(curr => (<option key={curr.code} value={curr.code}>{curr.symbol} {curr.code}</option>))}
                             </select>
-                            {selectedAccount && (
-                              <span className="text-xs text-gray-500">
-                                (Account: {accountCurrency})
-                              </span>
-                            )}
+                            {selectedAccount && <span className="text-xs text-gray-500">(Account: {accountCurrency})</span>}
                             {needsExchangeRate && (
                               <>
-                                <label className={`text-sm font-medium ml-2 ${hasCurrencyMismatch ? 'text-orange-600' : 'text-gray-600'}`}>
-                                  Rate {hasCurrencyMismatch ? '(Required)' : ''}:
-                                </label>
-                                <input
-                                  type="number"
-                                  step="0.0001"
-                                  value={newEntry.exchange_rate}
-                                  onChange={(e) => setNewEntry({ ...newEntry, exchange_rate: e.target.value })}
-                                  placeholder="Exchange rate"
-                                  className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${
-                                    hasCurrencyMismatch
-                                      ? 'border-orange-400 bg-orange-50 focus:ring-orange-500'
-                                      : 'border-amber-400 bg-amber-50 focus:ring-amber-500'
-                                  }`}
-                                />
+                                <label className={`text-sm font-medium ml-2 ${hasCurrencyMismatch ? 'text-orange-600' : 'text-gray-600'}`}>Rate {hasCurrencyMismatch ? '(Required)' : ''}:</label>
+                                <input type="number" step="0.0001" value={newEntry.exchange_rate} onChange={(e) => setNewEntry({ ...newEntry, exchange_rate: e.target.value })} placeholder="Exchange rate" className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${hasCurrencyMismatch ? 'border-orange-400 bg-orange-50 focus:ring-orange-500' : 'border-amber-400 bg-amber-50 focus:ring-amber-500'}`} />
                               </>
                             )}
                           </div>
@@ -758,13 +662,9 @@ export default function Ledger() {
                       </div>
                     </td>
                   </tr>
-                  {/* ... [Render Input Rows based on Transfer/Regular] ... */}
-                  {/* (Keeping it brief here, ensure you use the same Input row code blocks as before) */}
                   {newEntry.entry_type === 'transfer' ? (
                     <tr className="bg-blue-50/50">
-                      <td className="px-4 py-2">
-                        <input type="date" value={newEntry.entry_date} onChange={e => setNewEntry({...newEntry, entry_date: e.target.value})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"/>
-                      </td>
+                      <td className="px-4 py-2"><input type="date" value={newEntry.entry_date} onChange={e => setNewEntry({...newEntry, entry_date: e.target.value})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"/></td>
                       <td className="px-4 py-2" colSpan={2}>
                          <div className="flex gap-1">
                            <select value={newEntry.from_account_id} onChange={e => setNewEntry({...newEntry, from_account_id: e.target.value})} className="w-1/2 text-sm border rounded p-1"><option value="">From</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.account_name}</option>)}</select>
@@ -778,6 +678,7 @@ export default function Ledger() {
                       <td className="px-4 py-2 text-center"><button onClick={handleAddEntry} className="p-1 bg-green-500 text-white rounded"><Save className="w-4 h-4"/></button></td>
                     </tr>
                   ) : (
+                    <>
                     <tr className="bg-blue-50/50">
                         <td className="px-4 py-2"><input type="date" value={newEntry.entry_date} onChange={e => setNewEntry({...newEntry, entry_date: e.target.value})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"/></td>
                         <td className="px-4 py-2"><select value={newEntry.account_id} onChange={e => setNewEntry({...newEntry, account_id: e.target.value})} className="w-full text-sm border rounded p-1"><option value="">Account</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.account_name}</option>)}</select></td>
@@ -788,6 +689,20 @@ export default function Ledger() {
                         <td colSpan={2}></td>
                         <td className="px-4 py-2 text-center"><button onClick={handleAddEntry} className="p-1 bg-green-500 text-white rounded"><Save className="w-4 h-4"/></button></td>
                     </tr>
+                    {(newEntry.category === 'Maintenance Fees' || newEntry.category === 'Extra Fees') && (
+                        <tr className="bg-blue-50/30">
+                          <td colSpan={9} className="px-4 py-2">
+                            <div className="flex items-center gap-2">
+                              <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Unit:</label>
+                              <select value={newEntry.unit_id} onChange={async (e) => { const unitId = e.target.value; setNewEntry({ ...newEntry, unit_id: unitId }); if (unitId) { await fetchUnitDuesCurrency(unitId); } else { setUnitDuesCurrency(null); } }} className="px-3 py-1.5 text-sm border border-gray-300 rounded bg-white">
+                                <option value="">Choose unit...</option>
+                                {units.map(unit => (<option key={unit.id} value={unit.id}>{unit.block ? `${unit.block}-` : ''}{unit.unit_number} {unit.owner_name ? `(${unit.owner_name})` : ''}</option>))}
+                              </select>
+                            </div>
+                          </td>
+                        </tr>
+                    )}
+                    </>
                   )}
                 </>
               )}
@@ -835,6 +750,489 @@ export default function Ledger() {
   );
 }
 
-// ... [Keep EntryRow and AccountFormModal exactly as they were in your previous code] ...
-// (I am omitting them here for brevity, but you should keep the interfaces and components
-// defined at the bottom of your file as they were correct.)
+interface EntryRowProps {
+  entry: LedgerEntry;
+  accounts: Account[];
+  categories: BudgetCategory[];
+  units: Array<{ id: string; unit_number: string; block: string | null; owner_name: string | null }>;
+  isEditing: boolean;
+  isAdmin: boolean;
+  formatCurrency: (amount: number) => string;
+  accountBalance: number;
+  totalBalance: number;
+  onEdit: () => void;
+  onSave: (updates: Partial<LedgerEntry>) => void;
+  onCancel: () => void;
+  onDelete: () => void;
+}
+
+function EntryRow({
+  entry,
+  accounts,
+  categories,
+  units,
+  isEditing,
+  isAdmin,
+  formatCurrency,
+  accountBalance,
+  totalBalance,
+  onEdit,
+  onSave,
+  onCancel,
+  onDelete,
+}: EntryRowProps) {
+  const [editData, setEditData] = useState({
+    entry_date: entry.entry_date,
+    entry_type: entry.entry_type,
+    account_id: entry.account_id || '',
+    category: entry.category,
+    description: entry.description || '',
+    amount: entry.amount,
+    unit_id: '',
+  });
+
+  const account = accounts.find(a => a.id === entry.account_id);
+  const isMaintenanceRelated = editData.category === 'Maintenance Fees' || editData.category === 'Extra Fees';
+
+  if (isEditing) {
+    return (
+      <>
+        <tr className="bg-yellow-50">
+          <td className="px-4 py-2">
+            <input
+              type="date"
+              value={editData.entry_date}
+              onChange={(e) => setEditData({ ...editData, entry_date: e.target.value })}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"
+            />
+          </td>
+          <td className="px-4 py-2">
+            <select
+              value={editData.account_id}
+              onChange={(e) => setEditData({ ...editData, account_id: e.target.value })}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"
+            >
+              <option value="">Select</option>
+              {accounts.map(acc => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.account_name}
+                </option>
+              ))}
+            </select>
+          </td>
+          <td className="px-4 py-2">
+            <select
+              value={editData.category}
+              onChange={(e) => setEditData({ ...editData, category: e.target.value, unit_id: '' })}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"
+            >
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.category_name}>{cat.category_name}</option>
+              ))}
+              <option value="Other">Other</option>
+            </select>
+          </td>
+          <td className="px-4 py-2">
+            <input
+              type="text"
+              value={editData.description}
+              onChange={(e) => setEditData({ ...editData, description: e.target.value })}
+              className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"
+            />
+          </td>
+          <td className="px-4 py-2">
+            <input
+              type="number"
+              value={editData.entry_type === 'expense' ? editData.amount : ''}
+              onChange={(e) => setEditData({ ...editData, amount: Number(e.target.value), entry_type: 'expense' })}
+              placeholder="0"
+              className="w-full px-2 py-1.5 text-sm border border-red-200 rounded focus:ring-2 focus:ring-red-400 bg-red-50/50 text-right text-red-600"
+            />
+          </td>
+          <td className="px-4 py-2">
+            <input
+              type="number"
+              value={editData.entry_type === 'income' ? editData.amount : ''}
+              onChange={(e) => setEditData({ ...editData, amount: Number(e.target.value), entry_type: 'income' })}
+              placeholder="0"
+              className="w-full px-2 py-1.5 text-sm border border-green-200 rounded focus:ring-2 focus:ring-green-400 bg-green-50/50 text-right text-green-600"
+            />
+          </td>
+          <td className="px-4 py-2 text-right text-sm text-gray-400">-</td>
+          <td className="px-4 py-2 text-right text-sm text-gray-400">-</td>
+          <td className="px-4 py-2">
+            <div className="flex justify-center gap-1">
+              <button
+                onClick={() => {
+                  let finalDescription = editData.description;
+                  if (isMaintenanceRelated && editData.unit_id) {
+                    const unit = units.find(u => u.id === editData.unit_id);
+                    const unitLabel = unit ? `Unit ${unit.block ? `${unit.block}-` : ''}${unit.unit_number}` : '';
+                    finalDescription = finalDescription ? `${unitLabel} - ${finalDescription}` : unitLabel;
+                  }
+                  onSave({
+                    entry_date: editData.entry_date,
+                    entry_type: editData.entry_type,
+                    account_id: editData.account_id,
+                    category: editData.category,
+                    description: finalDescription,
+                    amount: editData.amount,
+                  });
+                }}
+                className="p-1.5 bg-green-500 text-white rounded hover:bg-green-600"
+                title="Save"
+              >
+                <Check className="w-4 h-4" />
+              </button>
+              <button
+                onClick={onCancel}
+                className="p-1.5 bg-gray-400 text-white rounded hover:bg-gray-500"
+                title="Cancel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </td>
+        </tr>
+        {isMaintenanceRelated && (
+          <tr className="bg-yellow-50/50">
+            <td colSpan={9} className="px-4 py-2">
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Unit:</label>
+                <select
+                  value={editData.unit_id}
+                  onChange={(e) => setEditData({ ...editData, unit_id: e.target.value })}
+                  className="px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"
+                >
+                  <option value="">Choose unit...</option>
+                  {units.map(unit => (
+                    <option key={unit.id} value={unit.id}>
+                      {unit.block ? `${unit.block}-` : ''}{unit.unit_number} {unit.owner_name ? `(${unit.owner_name})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 italic">Note: Editing does not update unit payment records</p>
+              </div>
+            </td>
+          </tr>
+        )}
+      </>
+    );
+  }
+
+  const fromAccount = accounts.find(a => a.id === entry.from_account_id);
+  const toAccount = accounts.find(a => a.id === entry.to_account_id);
+
+  return (
+    <tr className="hover:bg-gray-50">
+      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+        {format(new Date(entry.entry_date), 'MMM d, yyyy')}
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+        {entry.entry_type === 'transfer' ? (
+          fromAccount && toAccount ? (
+            <div className="flex items-center gap-1 text-xs">
+              <div className="flex items-center">
+                {fromAccount.account_type === 'bank' ? (
+                  <Building2 className="w-3 h-3 text-blue-600 mr-1" />
+                ) : (
+                  <Wallet className="w-3 h-3 text-green-600 mr-1" />
+                )}
+                <span className="truncate">{fromAccount.account_name}</span>
+              </div>
+              <span className="text-gray-400">→</span>
+              <div className="flex items-center">
+                {toAccount.account_type === 'bank' ? (
+                  <Building2 className="w-3 h-3 text-blue-600 mr-1" />
+                ) : (
+                  <Wallet className="w-3 h-3 text-green-600 mr-1" />
+                )}
+                <span className="truncate">{toAccount.account_name}</span>
+              </div>
+            </div>
+          ) : (
+            <span className="text-gray-400">Transfer</span>
+          )
+        ) : account ? (
+          <div className="flex items-center">
+            {account.account_type === 'bank' ? (
+              <Building2 className="w-4 h-4 text-blue-600 mr-1.5" />
+            ) : (
+              <Wallet className="w-4 h-4 text-green-600 mr-1.5" />
+            )}
+            <span className="truncate">{account.account_name}</span>
+          </div>
+        ) : (
+          <span className="text-gray-400">-</span>
+        )}
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
+        {entry.entry_type === 'transfer' ? (
+          <span className="text-blue-600 font-medium">Transfer</span>
+        ) : (
+          entry.category
+        )}
+      </td>
+      <td className="px-4 py-3 text-sm text-gray-500">
+        <p className="truncate max-w-xs">{entry.description || '-'}</p>
+        {entry.vendor_name && (
+          <p className="text-xs text-gray-400">Vendor: {entry.vendor_name}</p>
+        )}
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap text-right">
+        {entry.entry_type === 'expense' ? (
+          <div>
+            <span className="font-semibold text-red-600">
+              {new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: entry.currency_code,
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              }).format(entry.amount)}
+            </span>
+            {(entry.currency_code !== 'TRY' || entry.exchange_rate !== 1.0) && entry.exchange_rate !== null && (
+              <p className="text-xs text-gray-400">
+                {entry.currency_code !== 'TRY' ? (
+                  <>= {formatCurrency(entry.amount_reporting_try)} @ {entry.exchange_rate}</>
+                ) : (
+                  <>@ {entry.exchange_rate} → {new Intl.NumberFormat('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }).format(entry.amount * entry.exchange_rate)} applied</>
+                )}
+              </p>
+            )}
+          </div>
+        ) : entry.entry_type === 'transfer' ? (
+          <span className="font-semibold text-blue-600">
+            {formatCurrency(entry.amount)}
+          </span>
+        ) : (
+          <span className="text-gray-300">-</span>
+        )}
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap text-right">
+        {entry.entry_type === 'income' ? (
+          <div>
+            <span className="font-semibold text-green-600">
+              {new Intl.NumberFormat('en-US', {
+                style: 'currency',
+                currency: entry.currency_code,
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              }).format(entry.amount)}
+            </span>
+            {(entry.currency_code !== 'TRY' || entry.exchange_rate !== 1.0) && entry.exchange_rate !== null && (
+              <p className="text-xs text-gray-400">
+                {entry.currency_code !== 'TRY' ? (
+                  <>= {formatCurrency(entry.amount_reporting_try)} @ {entry.exchange_rate}</>
+                ) : (
+                  <>@ {entry.exchange_rate} → {new Intl.NumberFormat('en-US', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }).format(entry.amount * entry.exchange_rate)} applied</>
+                )}
+              </p>
+            )}
+          </div>
+        ) : entry.entry_type === 'transfer' ? (
+          <span className="font-semibold text-blue-600">
+            {formatCurrency(entry.amount)}
+          </span>
+        ) : (
+          <span className="text-gray-300">-</span>
+        )}
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap text-right">
+        {entry.entry_type === 'transfer' ? (
+          <span className="text-gray-400">-</span>
+        ) : (
+          <span className={`font-medium ${accountBalance >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+            {formatCurrency(accountBalance)}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3 whitespace-nowrap text-right">
+        <span className={`font-semibold ${totalBalance >= 0 ? 'text-[#002561]' : 'text-red-600'}`}>
+          {formatCurrency(totalBalance)}
+        </span>
+      </td>
+      {isAdmin && (
+        <td className="px-4 py-3 whitespace-nowrap">
+          <div className="flex justify-center gap-1">
+            <button
+              onClick={onEdit}
+              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"
+              title="Edit"
+            >
+              <Edit2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onDelete}
+              className="p-1.5 text-red-600 hover:bg-red-50 rounded"
+              title="Delete"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </td>
+      )}
+    </tr>
+  );
+}
+
+interface AccountFormModalProps {
+  account: Account | null;
+  onClose: () => void;
+  onSave: (data: Partial<Account>) => void;
+}
+
+function AccountFormModal({ account, onClose, onSave }: AccountFormModalProps) {
+  const [formData, setFormData] = useState({
+    account_name: account?.account_name || '',
+    account_type: account?.account_type || 'bank' as 'bank' | 'cash',
+    account_number: account?.account_number || '',
+    initial_balance: account?.initial_balance || 0,
+    currency_code: account?.currency_code || 'TRY',
+  });
+
+  const SUPPORTED_CURRENCIES = [
+    { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
+    { code: 'USD', symbol: '$', name: 'US Dollar' },
+    { code: 'EUR', symbol: '€', name: 'Euro' },
+    { code: 'GBP', symbol: '£', name: 'British Pound' },
+    { code: 'RUB', symbol: '₽', name: 'Russian Ruble' },
+  ];
+
+  const handleSubmit = () => {
+    if (!formData.account_name) return;
+    onSave(formData);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <h3 className="text-xl font-semibold text-gray-900">
+            {account ? 'Edit Account' : 'Add Account'}
+          </h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Account Name *
+            </label>
+            <input
+              type="text"
+              value={formData.account_name}
+              onChange={(e) => setFormData({ ...formData, account_name: e.target.value })}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
+              placeholder="e.g., Main Bank Account"
+              autoFocus
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Account Type *
+            </label>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, account_type: 'bank' })}
+                className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center transition-all ${
+                  formData.account_type === 'bank'
+                    ? 'border-blue-500 bg-blue-50 text-blue-700'
+                    : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                }`}
+              >
+                <Building2 className="w-8 h-8 mb-2" />
+                <span className="font-medium">Bank Account</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setFormData({ ...formData, account_type: 'cash' })}
+                className={`p-4 rounded-xl border-2 flex flex-col items-center justify-center transition-all ${
+                  formData.account_type === 'cash'
+                    ? 'border-green-500 bg-green-50 text-green-700'
+                    : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                }`}
+              >
+                <Wallet className="w-8 h-8 mb-2" />
+                <span className="font-medium">Cash</span>
+              </button>
+            </div>
+          </div>
+
+          {formData.account_type === 'bank' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                Account Number (Optional)
+              </label>
+              <input
+                type="text"
+                value={formData.account_number}
+                onChange={(e) => setFormData({ ...formData, account_number: e.target.value })}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
+                placeholder="e.g., TR12 3456 7890"
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Currency *
+            </label>
+            <select
+              value={formData.currency_code}
+              onChange={(e) => setFormData({ ...formData, currency_code: e.target.value })}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
+            >
+              {SUPPORTED_CURRENCIES.map(curr => (
+                <option key={curr.code} value={curr.code}>
+                  {curr.symbol} {curr.code} - {curr.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Initial Balance ({formData.currency_code})
+            </label>
+            <input
+              type="number"
+              value={formData.initial_balance}
+              onChange={(e) => setFormData({ ...formData, initial_balance: Number(e.target.value) })}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
+              placeholder="0"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Starting balance when creating this account
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-600 hover:text-gray-900"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!formData.account_name}
+            className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] disabled:opacity-50"
+          >
+            {account ? 'Update' : 'Add'} Account
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
