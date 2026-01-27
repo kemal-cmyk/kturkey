@@ -13,7 +13,7 @@ import {
   ChevronRight, Scale, MessageSquare, Home
 } from 'lucide-react';
 import { format } from 'date-fns';
-import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory } from '../types/database';
+import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
 export default function Dashboard() {
@@ -25,9 +25,10 @@ export default function Dashboard() {
   const [debtAlerts, setDebtAlerts] = useState<DebtAlert[]>([]);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]); // ✅ Added to store raw entries for calculation
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
 
-  // Operational Data State (NEW)
+  // Operational Data State
   const [opsStats, setOpsStats] = useState({
     openTickets: 0,
     occupiedUnits: 0,
@@ -78,21 +79,28 @@ export default function Dashboard() {
         setBudgetCategories(categories || []);
 
         // Ledger Data (Charts)
+        // ✅ FIX: Select ALL columns so we have 'amount_reporting_try' and 'category'
         const { data: ledgerData } = await supabase
           .from('ledger_entries')
-          .select('entry_date, amount, entry_type')
+          .select('*')
           .eq('site_id', currentSite.id)
           .eq('fiscal_period_id', periods.id)
           .order('entry_date');
+
+        setPeriodEntries(ledgerData || []);
 
         const grouped: Record<string, { income: number; expense: number }> = {};
         ledgerData?.forEach(entry => {
           const month = format(new Date(entry.entry_date), 'MMM');
           if (!grouped[month]) grouped[month] = { income: 0, expense: 0 };
+          
+          // ✅ FIX: Use Reporting Amount (TL) for monthly charts too
+          const amount = Number(entry.amount_reporting_try || entry.amount);
+
           if (entry.entry_type === 'income') {
-            grouped[month].income += Number(entry.amount);
+            grouped[month].income += amount;
           } else {
-            grouped[month].expense += Number(entry.amount);
+            grouped[month].expense += amount;
           }
         });
         setMonthlyData(Object.entries(grouped).map(([month, data]) => ({
@@ -111,15 +119,13 @@ export default function Dashboard() {
         setDebtAlerts(alerts || []);
       }
 
-      // 3. Fetch Operational Stats (NEW)
-      // A. Open Tickets
+      // 3. Fetch Operational Stats
       const { count: ticketCount } = await supabase
         .from('support_tickets')
         .select('*', { count: 'exact', head: true })
         .eq('site_id', currentSite.id)
         .eq('status', 'open');
 
-      // B. Unit Occupancy
       const { data: units } = await supabase
         .from('units')
         .select('id, owner_id')
@@ -128,7 +134,6 @@ export default function Dashboard() {
       const totalUnits = units?.length || 0;
       const occupiedUnits = units?.filter(u => u.owner_id !== null).length || 0;
 
-      // C. Residents
       const { data: users } = await supabase
         .rpc('get_site_users', { p_site_id: currentSite.id });
 
@@ -157,7 +162,6 @@ export default function Dashboard() {
 
   const COLORS = ['#002561', '#0066cc', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
   
-  // Calculate Occupancy %
   const occupancyRate = opsStats.totalUnits > 0 
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
     : 0;
@@ -189,16 +193,24 @@ export default function Dashboard() {
     );
   }
 
-  const budgetData = budgetCategories.map((cat, idx) => ({
-    name: cat.category_name,
-    planned: Number(cat.planned_amount),
-    actual: Number(cat.actual_amount),
-    color: COLORS[idx % COLORS.length],
-  }));
+  // ✅ FIX: Calculate Actual Spent/Collected dynamically from ledger entries
+  // This sums up all EUR, USD, and TL entries converted to TL
+  const budgetData = budgetCategories.map((cat, idx) => {
+    const actualTotal = periodEntries
+      .filter(e => e.category === cat.category_name)
+      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
-  const pieData = budgetCategories.map((cat, idx) => ({
-    name: cat.category_name,
-    value: Number(cat.actual_amount),
+    return {
+      name: cat.category_name,
+      planned: Number(cat.planned_amount),
+      actual: actualTotal, // Using the live calculated total
+      color: COLORS[idx % COLORS.length],
+    };
+  });
+
+  const pieData = budgetData.map((data, idx) => ({
+    name: data.name,
+    value: data.actual,
     color: COLORS[idx % COLORS.length],
   })).filter(d => d.value > 0);
 
@@ -220,7 +232,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* SECTION 1: Operational Overview (NEW) */}
+      {/* SECTION 1: Operational Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Link to="/tickets" className="block">
           <StatCard
@@ -249,7 +261,7 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      {/* SECTION 2: Financial Overview (EXISTING) */}
+      {/* SECTION 2: Financial Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
