@@ -6,7 +6,7 @@ import {
   AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt,
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
-import type { FiscalPeriod, BudgetCategory } from '../types/database';
+import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { EXPENSE_CATEGORIES } from '../lib/constants';
 
 interface Account {
@@ -22,6 +22,8 @@ export default function FiscalPeriods() {
   const [periods, setPeriods] = useState<FiscalPeriod[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  // ✅ NEW: Store entries to calculate totals live
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]); 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showRolloverModal, setShowRolloverModal] = useState(false);
@@ -64,19 +66,27 @@ export default function FiscalPeriods() {
     setLoading(false);
   };
 
-  const fetchBudgetCategories = async (periodId: string) => {
-    const { data } = await supabase
-      .from('budget_categories')
-      .select('*')
-      .eq('fiscal_period_id', periodId)
-      .order('display_order');
+  // ✅ UPDATED: Fetch Categories AND Entries to calculate totals correctly
+  const fetchPeriodDetails = async (periodId: string) => {
+    const [catRes, entriesRes] = await Promise.all([
+        supabase
+          .from('budget_categories')
+          .select('*')
+          .eq('fiscal_period_id', periodId)
+          .order('display_order'),
+        supabase
+          .from('ledger_entries')
+          .select('*')
+          .eq('fiscal_period_id', periodId)
+    ]);
 
-    setBudgetCategories(data || []);
+    setBudgetCategories(catRes.data || []);
+    setLedgerEntries(entriesRes.data || []);
   };
 
   const handleSelectPeriod = (period: FiscalPeriod) => {
     setSelectedPeriod(period);
-    fetchBudgetCategories(period.id);
+    fetchPeriodDetails(period.id);
   };
 
   const activatePeriod = async (periodId: string) => {
@@ -105,8 +115,6 @@ export default function FiscalPeriods() {
       minimumFractionDigits: 0,
     }).format(amount);
   };
-
-  const activePeriod = periods.find(p => p.status === 'active');
 
   if (loading) {
     return (
@@ -226,11 +234,13 @@ export default function FiscalPeriods() {
                   {budgetCategories.length > 0 ? (
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
-                        const percentage = selectedPeriod.total_budget > 0
-                          ? (cat.planned_amount / selectedPeriod.total_budget) * 100
-                          : 0;
+                        // ✅ FIX: Calculate Actual Spent dynamically from entries (Base Currency Logic)
+                        const categoryActual = ledgerEntries
+                            .filter(e => e.category === cat.category_name)
+                            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
                         const utilization = cat.planned_amount > 0
-                          ? (cat.actual_amount / cat.planned_amount) * 100
+                          ? (categoryActual / cat.planned_amount) * 100
                           : 0;
 
                         return (
@@ -241,7 +251,7 @@ export default function FiscalPeriods() {
                               </span>
                               <div className="flex items-center space-x-2">
                                 <span className="text-sm text-gray-500">
-                                  {formatCurrency(cat.actual_amount)} / {formatCurrency(cat.planned_amount)}
+                                  {formatCurrency(categoryActual)} / {formatCurrency(cat.planned_amount)}
                                 </span>
                                 {isAdmin && selectedPeriod.status === 'active' && (
                                   <button
@@ -268,7 +278,7 @@ export default function FiscalPeriods() {
                                             .from('budget_categories')
                                             .delete()
                                             .eq('id', cat.id);
-                                          fetchBudgetCategories(selectedPeriod.id);
+                                          fetchPeriodDetails(selectedPeriod.id);
                                         }
                                       }}
                                       className="p-1 text-red-600 hover:bg-white rounded transition-colors"
@@ -404,7 +414,7 @@ export default function FiscalPeriods() {
           onClose={() => setShowAddCategoryModal(false)}
           onAdded={() => {
             setShowAddCategoryModal(false);
-            fetchBudgetCategories(selectedPeriod.id);
+            fetchPeriodDetails(selectedPeriod.id);
           }}
         />
       )}
@@ -415,7 +425,7 @@ export default function FiscalPeriods() {
           onClose={() => setEditingCategory(null)}
           onUpdated={() => {
             setEditingCategory(null);
-            fetchBudgetCategories(selectedPeriod.id);
+            fetchPeriodDetails(selectedPeriod.id);
           }}
         />
       )}
@@ -430,7 +440,7 @@ export default function FiscalPeriods() {
           onClose={() => setAddingEntryCategory(null)}
           onAdded={() => {
             setAddingEntryCategory(null);
-            fetchBudgetCategories(selectedPeriod.id);
+            fetchPeriodDetails(selectedPeriod.id);
           }}
         />
       )}
