@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { 
   MessageSquare, Plus, Search, Filter, 
-  Clock, Loader2, X, CheckCircle, AlertCircle
+  Clock, Loader2, X, AlertCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -47,8 +47,9 @@ export default function Tickets() {
   const fetchTickets = async () => {
     try {
       setLoading(true);
+      // FIX 1: Changed 'tickets' to 'support_tickets'
       let query = supabase
-        .from('tickets')
+        .from('support_tickets') 
         .select(`
           *,
           profiles:created_by (full_name),
@@ -78,16 +79,16 @@ export default function Tickets() {
   };
 
   const handleStatusChange = async (ticketId: string, newStatus: string) => {
-    // 1. Optimistic Update (Update UI immediately)
+    // 1. Optimistic Update
     const originalTickets = [...tickets];
     setTickets(tickets.map(t => 
       t.id === ticketId ? { ...t, status: newStatus as any } : t
     ));
 
     try {
-      // 2. Update Database
+      // FIX 2: Changed 'tickets' to 'support_tickets'
       const { error } = await supabase
-        .from('tickets')
+        .from('support_tickets')
         .update({ status: newStatus })
         .eq('id', ticketId);
 
@@ -96,7 +97,7 @@ export default function Tickets() {
     } catch (error) {
       console.error('Failed to update status:', error);
       alert('Failed to update status');
-      setTickets(originalTickets); // Revert if failed
+      setTickets(originalTickets);
     }
   };
 
@@ -106,34 +107,39 @@ export default function Tickets() {
 
     setSubmitting(true);
     try {
-      // Get user's unit (optional)
-      const { data: userRole } = await supabase
-        .from('user_site_roles')
-        .select('units(id)')
-        .eq('user_id', user.id)
+      // 1. Try to find the user's unit (Safe fetch)
+      const { data: userUnits } = await supabase
+        .from('units')
+        .select('id')
+        .eq('owner_id', user.id)
         .eq('site_id', currentSite.id)
-        .maybeSingle();
+        .limit(1);
 
-      const unitId = userRole?.units?.[0]?.id;
+      // Admins might not have a unit, so this stays null
+      const unitId = userUnits && userUnits.length > 0 ? userUnits[0].id : null;
 
-      const { error } = await supabase.from('tickets').insert({
+      // FIX 3: Changed 'tickets' to 'support_tickets'
+      const { error } = await supabase.from('support_tickets').insert({
         site_id: currentSite.id,
         created_by: user.id,
-        unit_id: unitId,
+        unit_id: unitId, 
         title: formData.title,
         description: formData.description,
         priority: formData.priority,
         category: formData.category,
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error('Supabase Insert Error:', error);
+        throw error;
+      }
 
       setShowModal(false);
       setFormData({ title: '', description: '', priority: 'medium', category: 'maintenance' });
       fetchTickets();
     } catch (error) {
-      console.error('Error creating ticket:', error);
-      alert('Failed to create ticket');
+      console.error('Full Error Object:', error);
+      alert('Failed to create ticket.');
     } finally {
       setSubmitting(false);
     }
@@ -346,50 +352,3 @@ export default function Tickets() {
     </div>
   );
 }
-const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentSite || !user) return;
-
-    setSubmitting(true);
-    try {
-      // FIX: Fetch unit directly from 'units' table instead of via 'user_site_roles' relationship
-      // This prevents "Could not find relationship" errors
-      const { data: userUnits, error: unitError } = await supabase
-        .from('units')
-        .select('id')
-        .eq('owner_id', user.id)
-        .eq('site_id', currentSite.id)
-        .limit(1);
-
-      if (unitError) {
-        console.warn('Could not fetch user unit:', unitError);
-      }
-
-      // If user is Admin/Manager, they might not have a unit. That is okay.
-      const unitId = userUnits && userUnits.length > 0 ? userUnits[0].id : null;
-
-      const { error } = await supabase.from('tickets').insert({
-        site_id: currentSite.id,
-        created_by: user.id,
-        unit_id: unitId, // Passes 'null' if no unit found (common for Admins)
-        title: formData.title,
-        description: formData.description,
-        priority: formData.priority,
-        category: formData.category,
-      });
-
-      if (error) {
-        console.error('Supabase Insert Error:', error); // Check Console (F12) if this happens!
-        throw error;
-      }
-
-      setShowModal(false);
-      setFormData({ title: '', description: '', priority: 'medium', category: 'maintenance' });
-      fetchTickets();
-    } catch (error) {
-      console.error('Full Error Object:', error);
-      alert('Failed to create ticket. Please check console (F12) for details.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
