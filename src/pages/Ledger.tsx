@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import * as XLSX from 'xlsx'; // <--- 1. Import Added
+import * as XLSX from 'xlsx';
 import {
   Receipt, Search, Filter, Download, Loader2,
   TrendingUp, TrendingDown, ChevronDown, Calendar,
@@ -113,11 +113,12 @@ export default function Ledger() {
   const fetchEntries = async () => {
     if (!currentSite) return;
 
+    // Fetch in ASCENDING order for correct balance calculation
     const { data } = await supabase
       .from('ledger_entries')
       .select('*')
       .eq('site_id', currentSite.id)
-      .order('entry_date', { ascending: true }); // ASC for calculation
+      .order('entry_date', { ascending: true }); 
 
     if (selectedPeriod && data) {
       const filtered = data.filter(entry =>
@@ -351,10 +352,13 @@ export default function Ledger() {
     await fetchData();
   };
 
-  // --- BALANCE LOGIC ---
+  // --- BALANCE CALCULATION LOGIC ---
   const sortedAllEntries = [...entries].sort(
     (a, b) => new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime()
   );
+
+  // 1. Define Opening Balance (FIXED: Added this line back)
+  const openingBalance = accounts.reduce((sum, acc) => sum + Number(acc.initial_balance), 0);
 
   const accountBalances: Record<string, number> = {};
   accounts.forEach(acc => {
@@ -423,9 +427,8 @@ export default function Ledger() {
   );
   const needsExchangeRate = hasCurrencyMismatch || newEntry.currency_code !== 'TRY';
 
-  // --- 2. HANDLE EXPORT FUNCTION ---
+  // --- HANDLE EXPORT ---
   const handleExport = () => {
-    // Create a clean version of the data for Excel
     const exportData = displayEntries.map(entry => {
       const account = accounts.find(a => a.id === entry.account_id);
       const amountTry = Number(entry.amount_reporting_try || entry.amount);
@@ -446,22 +449,19 @@ export default function Ledger() {
       };
     });
 
-    // Create Worksheet
     const ws = XLSX.utils.json_to_sheet(exportData);
     
-    // Auto-width for columns
     const wscols = [
-      { wch: 12 }, // Date
-      { wch: 10 }, // Type
-      { wch: 20 }, // Category
-      { wch: 30 }, // Desc
-      { wch: 20 }, // Account
-      { wch: 12 }, // Debit
-      { wch: 12 }, // Credit
+      { wch: 12 }, 
+      { wch: 10 }, 
+      { wch: 20 }, 
+      { wch: 30 }, 
+      { wch: 20 }, 
+      { wch: 12 }, 
+      { wch: 12 }, 
     ];
     ws['!cols'] = wscols;
 
-    // Create Workbook and Export
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Ledger");
     XLSX.writeFile(wb, `Ledger_Export_${currentSite?.name}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
@@ -490,7 +490,6 @@ export default function Ledger() {
             <Upload className="w-4 h-4 mr-2" />
             Import from Excel
           </button>
-          {/* 3. Export Button Connected */}
           <button 
             onClick={handleExport}
             className="flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
@@ -602,14 +601,16 @@ export default function Ledger() {
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center justify-between">
-            <span className="text-gray-500 text-sm">Total Asset Value</span>
+            <span className="text-gray-500 text-sm">Net Balance</span>
             <Receipt className="w-5 h-5 text-[#002561]" />
           </div>
-          <p className={`text-2xl font-bold mt-1 text-[#002561]`}>
-            {formatCurrency(currentTotalBalance)}
+          <p className={`text-2xl font-bold mt-1 ${
+            netBalance >= 0 ? 'text-green-600' : 'text-red-600'
+          }`}>
+            {formatCurrency(netBalance)}
           </p>
           <p className="text-xs text-gray-400 mt-1">
-            All accounts combined
+            Opening: {formatCurrency(openingBalance)}
           </p>
         </div>
       </div>
@@ -663,35 +664,15 @@ export default function Ledger() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">
-                  Date
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">
-                  Account
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">
-                  Category
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  Description
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-red-600 uppercase w-28">
-                  Debit
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase w-28">
-                  Credit
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">
-                  Acc. Balance
-                </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">
-                  Total Balance
-                </th>
-                {isAdmin && (
-                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">
-                    Actions
-                  </th>
-                )}
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">Date</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Account</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Category</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-red-600 uppercase w-28">Debit</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase w-28">Credit</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Acc. Balance</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Total Balance</th>
+                {isAdmin && <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -804,7 +785,6 @@ export default function Ledger() {
                         <td colSpan={2}></td>
                         <td className="px-4 py-2 text-center"><button onClick={handleAddEntry} className="p-1 bg-green-500 text-white rounded"><Save className="w-4 h-4"/></button></td>
                     </tr>
-                    {/* UNIT SELECT ROW */}
                     {(newEntry.category === 'Maintenance Fees' || newEntry.category === 'Extra Fees') && (
                         <tr className="bg-blue-50/30">
                           <td colSpan={9} className="px-4 py-2">
