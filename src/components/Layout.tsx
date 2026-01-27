@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage, Language } from '../contexts/LanguageContext';
+import { usePermissions } from '../contexts/PermissionsContext';
 import {
   LayoutDashboard,
   Building2,
@@ -22,6 +23,7 @@ import {
   BarChart2,
   UserCog,
   Globe,
+  Shield,
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -29,15 +31,22 @@ interface LayoutProps {
 }
 
 const languageLabels: Record<Language, string> = {
-  tr: 'TR',
   en: 'EN',
+  tr: 'TR',
   ru: 'RU',
   de: 'DE',
+  nl: 'NL',
+  fa: 'FA',
+  no: 'NO',
+  sv: 'SV',
+  fi: 'FI',
+  da: 'DA',
 };
 
 export default function Layout({ children }: LayoutProps) {
   const { user, profile, isSuperAdmin, sites, currentSite, currentRole, signOut, setCurrentSite } = useAuth();
   const { language, setLanguage } = useLanguage();
+  const { canAccess } = usePermissions();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -45,26 +54,25 @@ export default function Layout({ children }: LayoutProps) {
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
 
   const isAdmin = isSuperAdmin || currentRole?.role === 'admin';
-  const isBoardMember = currentRole?.role === 'board_member';
-  const isHomeowner = currentRole?.role === 'homeowner' && !isSuperAdmin;
 
   const navigation = [
-    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, show: true },
-    { name: 'Units', href: '/units', icon: Home, show: isAdmin || isBoardMember },
-    { name: 'Residents', href: '/residents', icon: Users, show: isAdmin || isBoardMember },
-    { name: 'Financial Periods', href: '/fiscal-periods', icon: Calendar, show: isAdmin },
-    { name: 'Budget', href: '/budget', icon: Wallet, show: isAdmin || isBoardMember },
-    { name: 'Ledger', href: '/ledger', icon: Receipt, show: isAdmin || isBoardMember },
-    { name: 'Budget vs Actual', href: '/budget-vs-actual', icon: FileText, show: isAdmin || isBoardMember },
-    { name: 'Monthly Income & Expenses', href: '/monthly-income-expenses', icon: BarChart2, show: isAdmin || isBoardMember },
-    { name: 'Debt Tracking', href: '/debt-tracking', icon: AlertTriangle, show: isAdmin || isBoardMember },
-    { name: 'Reports', href: '/reports', icon: FileText, show: true },
-    { name: 'Support Tickets', href: '/tickets', icon: Ticket, show: true },
-    { name: 'My Account', href: '/my-account', icon: Users, show: isHomeowner },
-    { name: 'User Management', href: '/user-management', icon: UserCog, show: isSuperAdmin },
-    { name: 'Language', href: '/language', icon: Globe, show: true },
-    { name: 'Settings', href: '/settings', icon: Settings, show: isAdmin },
-  ].filter(item => item.show);
+    { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+    { name: 'Units', href: '/units', icon: Home },
+    { name: 'Residents', href: '/residents', icon: Users },
+    { name: 'Financial Periods', href: '/fiscal-periods', icon: Calendar },
+    { name: 'Budget', href: '/budget', icon: Wallet },
+    { name: 'Ledger', href: '/ledger', icon: Receipt },
+    { name: 'Budget vs Actual', href: '/budget-vs-actual', icon: FileText },
+    { name: 'Monthly Income & Expenses', href: '/monthly-income-expenses', icon: BarChart2 },
+    { name: 'Debt Tracking', href: '/debt-tracking', icon: AlertTriangle },
+    { name: 'Reports', href: '/reports', icon: FileText },
+    { name: 'Support Tickets', href: '/tickets', icon: Ticket },
+    { name: 'My Account', href: '/my-account', icon: Users },
+    { name: 'User Management', href: '/user-management', icon: UserCog },
+    { name: 'Language', href: '/language-settings', icon: Globe },
+    { name: 'Role & Permissions', href: '/role-settings', icon: Shield },
+    { name: 'Settings', href: '/settings', icon: Settings },
+  ].filter(item => canAccess(item.href));
 
   const handleSignOut = async () => {
     await signOut();

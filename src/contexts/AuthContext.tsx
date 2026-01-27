@@ -11,6 +11,7 @@ interface AuthContextType {
   sites: Site[];
   currentSite: Site | null;
   currentRole: UserSiteRole | null;
+  userRole: string | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ data: { user: User | null } | null; error: Error | null }>;
@@ -174,6 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sites,
       currentSite,
       currentRole,
+      userRole: currentRole?.role || null,
       loading,
       signIn,
       signUp,

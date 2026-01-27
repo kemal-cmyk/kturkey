@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider } from './contexts/LanguageContext';
+import { PermissionsProvider } from './contexts/PermissionsContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -22,6 +23,7 @@ import Settings from './pages/Settings';
 import MyAccount from './pages/MyAccount';
 import UserManagement from './pages/UserManagement';
 import LanguageSettings from './pages/LanguageSettings';
+import RoleSettings from './pages/RoleSettings';
 import { Loader2 } from 'lucide-react';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -255,6 +257,26 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
+      <Route
+        path="/language-settings"
+        element={
+          <PrivateRoute>
+            <Layout>
+              <LanguageSettings />
+            </Layout>
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/role-settings"
+        element={
+          <PrivateRoute>
+            <Layout>
+              <RoleSettings />
+            </Layout>
+          </PrivateRoute>
+        }
+      />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
@@ -266,7 +288,9 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <LanguageProvider>
-          <AppRoutes />
+          <PermissionsProvider>
+            <AppRoutes />
+          </PermissionsProvider>
         </LanguageProvider>
       </AuthProvider>
     </BrowserRouter>
