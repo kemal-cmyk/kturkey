@@ -352,12 +352,25 @@ export default function Ledger() {
     await fetchData();
   };
 
-  // --- BALANCE CALCULATION LOGIC ---
-  const sortedAllEntries = [...entries].sort(
-    (a, b) => new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime()
-  );
+// --- BALANCE CALCULATION LOGIC ---
+  
+  // 1. Ensure Chronological Order (FIXED: Added secondary sort by creation time)
+  const sortedAllEntries = [...entries].sort((a, b) => {
+    const dateA = new Date(a.entry_date).getTime();
+    const dateB = new Date(b.entry_date).getTime();
+    
+    // Primary sort: Date
+    if (dateA !== dateB) {
+      return dateA - dateB;
+    }
+    
+    // Secondary sort: Creation Time (fix for same-day balance jumps)
+    const createdA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const createdB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return createdA - createdB;
+  });
 
-  // 1. Define Opening Balance (FIXED: Added this line back)
+  // 2. Define Opening Balance
   const openingBalance = accounts.reduce((sum, acc) => sum + Number(acc.initial_balance), 0);
 
   const accountBalances: Record<string, number> = {};
@@ -415,9 +428,15 @@ export default function Ledger() {
 
   const netBalance = openingBalance + totals.income - totals.expense;
 
-  const displayEntries = [...filteredEntriesWithBalance].sort(
-    (a, b) => new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime()
-  );
+  const displayEntries = [...filteredEntriesWithBalance].sort((a, b) => {
+    const dateA = new Date(a.entry_date).getTime();
+    const dateB = new Date(b.entry_date).getTime();
+    if (dateA !== dateB) return dateB - dateA; // Date Descending
+    
+    const createdA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const createdB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return createdB - createdA; // Created Time Descending
+  });
 
   const selectedAccount = accounts.find(a => a.id === newEntry.account_id);
   const accountCurrency = selectedAccount?.currency_code || currentSite?.default_currency || 'TRY';
