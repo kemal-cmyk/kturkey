@@ -107,6 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      // ✅ THE TINY FIX: Ignore background token refreshes
+      if (_event === 'TOKEN_REFRESHED') return;
+
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
