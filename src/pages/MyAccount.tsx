@@ -17,14 +17,13 @@ export default function MyAccount() {
   const [balance, setBalance] = useState<UnitBalance | null>(null);
   
   // Data State
-  const [payments, setPayments] = useState<Array<{ 
+  const [ledgerCredits, setLedgerCredits] = useState<Array<{ 
     id: string; 
     amount: number; 
-    payment_date: string; 
-    payment_method: string; 
-    reference_no: string | null; 
+    entry_date: string; 
     description: string | null;
     currency_code: string; 
+    exchange_rate: number;
   }>>([]);
   
   const [dues, setDues] = useState<Array<{
@@ -60,42 +59,53 @@ export default function MyAccount() {
       setUnit(unitData);
 
       if (unitData) {
-        // 2. Fetch all data in parallel
-        const [balanceRes, paymentsRes, duesRes, workflowRes] = await Promise.all([
-          // A. Balance View
+        // 2. Fetch Balance, Dues, and Workflow
+        const [balanceRes, duesRes, workflowRes, paymentIdsRes] = await Promise.all([
           supabase
             .from('unit_balances_from_ledger')
             .select('*')
             .eq('unit_id', unitData.id)
             .maybeSingle(),
           
-          // B. Payments (Linked via Payment IDs to Ledger for description, or direct from payments table)
-          supabase
-            .from('payments')
-            .select('*')
-            .eq('unit_id', unitData.id)
-            .order('payment_date', { ascending: false }),
-
-          // C. Dues (To show charges and unpaid items)
           supabase
             .from('dues')
             .select('*')
             .eq('unit_id', unitData.id)
             .order('month_date', { ascending: false }),
 
-          // D. Debt Status
           supabase
             .from('debt_workflows')
             .select('*')
             .eq('unit_id', unitData.id)
             .eq('is_active', true)
             .maybeSingle(),
+            
+          // Get Payment IDs first to filter Ledger
+          supabase
+            .from('payments')
+            .select('id')
+            .eq('unit_id', unitData.id)
         ]);
 
         setBalance(balanceRes.data);
-        setPayments(paymentsRes.data || []);
         setDues(duesRes.data || []);
         setDebtWorkflow(workflowRes.data);
+
+        // 3. Fetch Ledger Credits (Official Payment History)
+        const paymentIds = (paymentIdsRes.data || []).map(p => p.id);
+        
+        if (paymentIds.length > 0) {
+          const { data: ledgerData } = await supabase
+            .from('ledger_entries')
+            .select('id, amount, entry_date, description, currency_code, exchange_rate')
+            .in('payment_id', paymentIds)
+            .eq('entry_type', 'income') // Only Credits (Income)
+            .order('entry_date', { ascending: false });
+            
+          setLedgerCredits(ledgerData || []);
+        } else {
+          setLedgerCredits([]);
+        }
       }
     } catch (error) {
       console.error("Error fetching account data:", error);
@@ -222,7 +232,7 @@ export default function MyAccount() {
           <p className="text-2xl font-bold text-green-600">
             {formatCurrency(totalPaid, displayCurrency)}
           </p>
-          <p className="text-xs text-gray-500 mt-1">{payments.length} payments recorded</p>
+          <p className="text-xs text-gray-500 mt-1">{ledgerCredits.length} payments recorded</p>
         </div>
         
         <div className={`rounded-xl p-6 shadow-sm border ${currentBalance > 0 ? 'bg-white border-red-200' : 'bg-[#002561] border-[#002561]'}`}>
@@ -300,17 +310,17 @@ export default function MyAccount() {
           </div>
         </div>
 
-        {/* RIGHT COLUMN: Payment History */}
+        {/* RIGHT COLUMN: Payment History (FROM LEDGER) */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[500px]">
           <div className="px-6 py-4 border-b border-gray-100 bg-gray-50">
             <h3 className="font-semibold text-gray-900 flex items-center">
               <Receipt className="w-4 h-4 mr-2 text-gray-500" />
-              Payment History
+              Payment History (Credits)
             </h3>
           </div>
           
           <div className="overflow-y-auto flex-1 p-0">
-            {payments.length === 0 ? (
+            {ledgerCredits.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-8">
                 <CreditCard className="w-12 h-12 text-gray-300 mb-3" />
                 <p className="text-gray-500">No payments recorded yet.</p>
@@ -325,24 +335,21 @@ export default function MyAccount() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {payments.map((payment) => (
-                    <tr key={payment.id} className="hover:bg-gray-50">
+                  {ledgerCredits.map((credit) => (
+                    <tr key={credit.id} className="hover:bg-gray-50">
                       <td className="px-6 py-3">
                         <p className="font-medium text-gray-900">
-                          {format(new Date(payment.payment_date), 'dd MMM yyyy')}
+                          {format(new Date(credit.entry_date), 'dd MMM yyyy')}
                         </p>
                       </td>
                       <td className="px-6 py-3 text-gray-600">
-                        <p className="text-xs uppercase font-bold text-gray-400">
-                          {payment.payment_method.replace('_', ' ')}
+                        <p className="text-xs font-medium text-gray-700 truncate max-w-[200px]">
+                          {credit.description}
                         </p>
-                        {payment.reference_no && (
-                          <p className="text-xs font-mono mt-0.5">Ref: {payment.reference_no}</p>
-                        )}
                       </td>
                       <td className="px-6 py-3 text-right">
                         <span className="font-semibold text-green-600">
-                          +{formatCurrency(payment.amount, payment.currency_code)}
+                          +{formatCurrency(credit.amount, credit.currency_code)}
                         </span>
                       </td>
                     </tr>
