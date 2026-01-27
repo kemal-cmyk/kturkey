@@ -346,3 +346,50 @@ export default function Tickets() {
     </div>
   );
 }
+const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentSite || !user) return;
+
+    setSubmitting(true);
+    try {
+      // FIX: Fetch unit directly from 'units' table instead of via 'user_site_roles' relationship
+      // This prevents "Could not find relationship" errors
+      const { data: userUnits, error: unitError } = await supabase
+        .from('units')
+        .select('id')
+        .eq('owner_id', user.id)
+        .eq('site_id', currentSite.id)
+        .limit(1);
+
+      if (unitError) {
+        console.warn('Could not fetch user unit:', unitError);
+      }
+
+      // If user is Admin/Manager, they might not have a unit. That is okay.
+      const unitId = userUnits && userUnits.length > 0 ? userUnits[0].id : null;
+
+      const { error } = await supabase.from('tickets').insert({
+        site_id: currentSite.id,
+        created_by: user.id,
+        unit_id: unitId, // Passes 'null' if no unit found (common for Admins)
+        title: formData.title,
+        description: formData.description,
+        priority: formData.priority,
+        category: formData.category,
+      });
+
+      if (error) {
+        console.error('Supabase Insert Error:', error); // Check Console (F12) if this happens!
+        throw error;
+      }
+
+      setShowModal(false);
+      setFormData({ title: '', description: '', priority: 'medium', category: 'maintenance' });
+      fetchTickets();
+    } catch (error) {
+      console.error('Full Error Object:', error);
+      alert('Failed to create ticket. Please check console (F12) for details.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
