@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { usePermissions } from '../contexts/PermissionsContext'; // <--- Import this
+import { usePermissions } from '../contexts/PermissionsContext'; // Keep this
 import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
 import { format } from 'date-fns';
@@ -17,7 +17,20 @@ interface ReportLine {
 
 export default function BudgetVsActual() {
   const { currentSite, currentRole } = useAuth();
-  const { hasPermission } = usePermissions(); // <--- Use the hook
+  
+  // --- SAFETY CHECK START ---
+  // We get the entire context object to inspect it safely
+  const permContext = usePermissions();
+  
+  // We safely extract the function, or fallback to a dummy function if it's missing
+  const hasPermission = permContext && typeof permContext.hasPermission === 'function' 
+    ? permContext.hasPermission 
+    : (path: string) => {
+        console.warn(`Permission system warning: 'hasPermission' not found in context. Denying access to ${path}.`, permContext);
+        return false;
+      };
+  // --- SAFETY CHECK END ---
+
   const [loading, setLoading] = useState(true);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
@@ -27,11 +40,11 @@ export default function BudgetVsActual() {
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
 
-  // ✅ FIXED: Check dynamic permission instead of hardcoded roles
-  // We keep the admin check as a fallback, but rely on the permission system
+  // Safe Access Check
   const canView = currentRole?.role === 'admin' || hasPermission('/budget-vs-actual');
 
   useEffect(() => {
+    // Only fetch if we have a site AND permission
     if (currentSite && canView) {
       fetchFiscalPeriods();
     } else {
@@ -163,7 +176,6 @@ export default function BudgetVsActual() {
     window.print();
   };
 
-  // ✅ Updated Access Denied View
   if (!canView) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
