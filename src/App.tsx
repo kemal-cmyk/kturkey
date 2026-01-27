@@ -278,12 +278,17 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
+      {/* FIXED: Added PrivateRoute and Layout wrappers */}
       <Route
         path="/resident-statement"
         element={
-        <ResidentStatement />
+          <PrivateRoute>
+            <Layout>
+              <ResidentStatement />
+            </Layout>
+          </PrivateRoute>
         }
-        />
+      />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
