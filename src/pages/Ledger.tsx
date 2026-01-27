@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
+import * as XLSX from 'xlsx'; // <--- 1. Import Added
 import {
   Receipt, Search, Filter, Download, Loader2,
   TrendingUp, TrendingDown, ChevronDown, Calendar,
@@ -36,8 +37,6 @@ export default function Ledger() {
   const [editingRow, setEditingRow] = useState<string | null>(null);
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
-  
-  // ✅ UNITS STATE (Ensuring this is present)
   const [units, setUnits] = useState<Array<{ id: string; unit_number: string; block: string | null; owner_name: string | null }>>([]);
 
   const [newEntry, setNewEntry] = useState({
@@ -114,12 +113,11 @@ export default function Ledger() {
   const fetchEntries = async () => {
     if (!currentSite) return;
 
-    // Fetch in ASCENDING order for correct balance calculation
     const { data } = await supabase
       .from('ledger_entries')
       .select('*')
       .eq('site_id', currentSite.id)
-      .order('entry_date', { ascending: true }); 
+      .order('entry_date', { ascending: true }); // ASC for calculation
 
     if (selectedPeriod && data) {
       const filtered = data.filter(entry =>
@@ -150,7 +148,6 @@ export default function Ledger() {
     }
   }, [selectedPeriod]);
 
-  // ✅ UNITS FETCHING (Ensuring this is present)
   useEffect(() => {
     if (isAdmin && currentSite) {
       fetchUnitsForPayment();
@@ -354,7 +351,7 @@ export default function Ledger() {
     await fetchData();
   };
 
-  // --- BALANCE CALCULATION LOGIC ---
+  // --- BALANCE LOGIC ---
   const sortedAllEntries = [...entries].sort(
     (a, b) => new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime()
   );
@@ -412,6 +409,8 @@ export default function Ledger() {
     { income: 0, expense: 0 }
   );
 
+  const netBalance = openingBalance + totals.income - totals.expense;
+
   const displayEntries = [...filteredEntriesWithBalance].sort(
     (a, b) => new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime()
   );
@@ -423,6 +422,50 @@ export default function Ledger() {
     (unitDuesCurrency && newEntry.currency_code !== unitDuesCurrency)
   );
   const needsExchangeRate = hasCurrencyMismatch || newEntry.currency_code !== 'TRY';
+
+  // --- 2. HANDLE EXPORT FUNCTION ---
+  const handleExport = () => {
+    // Create a clean version of the data for Excel
+    const exportData = displayEntries.map(entry => {
+      const account = accounts.find(a => a.id === entry.account_id);
+      const amountTry = Number(entry.amount_reporting_try || entry.amount);
+      
+      return {
+        Date: format(new Date(entry.entry_date), 'dd.MM.yyyy'),
+        Type: entry.entry_type === 'transfer' ? 'Transfer' : (entry.entry_type === 'income' ? 'Income' : 'Expense'),
+        Category: entry.category,
+        Description: entry.description,
+        Account: account?.account_name || 'N/A',
+        'Debit (Out)': entry.entry_type === 'expense' ? amountTry : 0,
+        'Credit (In)': entry.entry_type === 'income' ? amountTry : 0,
+        'Original Amount': entry.amount,
+        'Currency': entry.currency_code,
+        'Rate': entry.exchange_rate,
+        'Account Balance': entry.accountBalance,
+        'Global Balance': entry.totalBalance
+      };
+    });
+
+    // Create Worksheet
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    
+    // Auto-width for columns
+    const wscols = [
+      { wch: 12 }, // Date
+      { wch: 10 }, // Type
+      { wch: 20 }, // Category
+      { wch: 30 }, // Desc
+      { wch: 20 }, // Account
+      { wch: 12 }, // Debit
+      { wch: 12 }, // Credit
+    ];
+    ws['!cols'] = wscols;
+
+    // Create Workbook and Export
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Ledger");
+    XLSX.writeFile(wb, `Ledger_Export_${currentSite?.name}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+  };
 
   if (loading) {
     return (
@@ -447,7 +490,11 @@ export default function Ledger() {
             <Upload className="w-4 h-4 mr-2" />
             Import from Excel
           </button>
-          <button className="flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+          {/* 3. Export Button Connected */}
+          <button 
+            onClick={handleExport}
+            className="flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+          >
             <Download className="w-4 h-4 mr-2" />
             Export
           </button>
@@ -616,15 +663,35 @@ export default function Ledger() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">Date</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Account</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Category</th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-red-600 uppercase w-28">Debit</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase w-28">Credit</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Acc. Balance</th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Total Balance</th>
-                {isAdmin && <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">Actions</th>}
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">
+                  Date
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">
+                  Account
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">
+                  Category
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  Description
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-red-600 uppercase w-28">
+                  Debit
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-green-600 uppercase w-28">
+                  Credit
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">
+                  Acc. Balance
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">
+                  Total Balance
+                </th>
+                {isAdmin && (
+                  <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase w-20">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -737,7 +804,7 @@ export default function Ledger() {
                         <td colSpan={2}></td>
                         <td className="px-4 py-2 text-center"><button onClick={handleAddEntry} className="p-1 bg-green-500 text-white rounded"><Save className="w-4 h-4"/></button></td>
                     </tr>
-                    {/* ✅ UNIT SELECT ROW */}
+                    {/* UNIT SELECT ROW */}
                     {(newEntry.category === 'Maintenance Fees' || newEntry.category === 'Extra Fees') && (
                         <tr className="bg-blue-50/30">
                           <td colSpan={9} className="px-4 py-2">
@@ -799,7 +866,6 @@ export default function Ledger() {
   );
 }
 
-// ✅ EntryRow Props (Includes units)
 interface EntryRowProps {
   entry: LedgerEntry;
   accounts: Account[];
@@ -816,7 +882,6 @@ interface EntryRowProps {
   onDelete: () => void;
 }
 
-// ✅ EntryRow Component Definition (Fixes ReferenceError)
 function EntryRow({
   entry,
   accounts,
@@ -1132,7 +1197,6 @@ function EntryRow({
   );
 }
 
-// ✅ AccountFormModal Definition (Also must be included)
 interface AccountFormModalProps {
   account: Account | null;
   onClose: () => void;
