@@ -66,24 +66,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setSites(userSites);
 
-    // LOGIC FIX: Only update Current Site if strictly necessary to avoid re-renders
+    // LOGIC FIX: Always allow updating the current site data if it exists
+    // This ensures that if you change a site name, it reflects immediately
     if (userSites.length > 0) {
       const storedSiteId = localStorage.getItem('currentSiteId');
       
       // Try to find stored site, otherwise fallback to first site
       const targetSite = userSites.find(s => s.id === storedSiteId) || userSites[0];
 
-      // CRITICAL: Only call setCurrentSite if the ID actually changed!
-      if (!currentSite || currentSite.id !== targetSite.id) {
-        setCurrentSite(targetSite);
+      setCurrentSite(targetSite);
         
-        // Determine Role
-        if (superAdmin) {
-          setCurrentRole({ role: 'admin' } as UserSiteRole);
-        } else {
-          const role = roles.find((r: any) => r.site_id === targetSite.id);
-          setCurrentRole(role || null);
-        }
+      // Determine Role
+      if (superAdmin) {
+        setCurrentRole({ role: 'admin' } as UserSiteRole);
+      } else {
+        const role = roles.find((r: any) => r.site_id === targetSite.id);
+        setCurrentRole(role || null);
       }
     }
   };
@@ -106,15 +104,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    // 2. Event Listener - OPTIMIZED
+    // 2. Event Listener - BALANCED
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Always update basic session state
       setSession(session);
       setUser(session?.user ?? null);
 
-      // ONLY fetch data on specific events (Login or Initial Load)
-      // We IGNORE 'TOKEN_REFRESHED' to stop the "ghost refreshing"
-      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+      // We still ignore 'TOKEN_REFRESHED' to prevent infinite loops.
+      // But we allow 'SIGNED_IN', 'INITIAL_SESSION', and 'USER_UPDATED'
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
         if (session?.user) {
           const superAdmin = await fetchProfile(session.user.id);
           await fetchSites(session.user.id, superAdmin);
@@ -133,9 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleSetCurrentSite = (site: Site) => {
-    // Optimization: Don't do anything if we are already on this site
-    if (currentSite?.id === site.id) return;
-
+    // REMOVED THE STRICT CHECK HERE.
+    // We allow setting the site even if IDs match, so data refreshes.
+    
     setCurrentSite(site);
     localStorage.setItem('currentSiteId', site.id);
 
@@ -179,28 +176,3 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user,
       session,
-      profile,
-      isSuperAdmin,
-      sites,
-      currentSite,
-      currentRole,
-      userRole: currentRole?.role || null,
-      loading,
-      signIn,
-      signUp,
-      signOut,
-      setCurrentSite: handleSetCurrentSite,
-      refreshSites,
-    }}>
-      {children}
-    </AuthContext.Provider>
-  );
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-}
