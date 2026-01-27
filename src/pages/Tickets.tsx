@@ -3,7 +3,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { 
   MessageSquare, Plus, Search, Filter, 
-  Clock, Loader2, X, AlertCircle
+  Clock, Loader2, X, AlertCircle, 
+  CheckCircle, PlayCircle, XCircle 
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -12,7 +13,7 @@ interface Ticket {
   title: string;
   description: string;
   status: 'open' | 'in_progress' | 'resolved' | 'closed';
-  priority: 'low' | 'medium' | 'high' | 'urgent'; // Updated to match DB (urgent vs critical)
+  priority: 'low' | 'medium' | 'high' | 'urgent';
   category: string;
   created_at: string;
   updated_at: string;
@@ -34,7 +35,7 @@ export default function Tickets() {
     title: '',
     description: '',
     priority: 'medium',
-    category: 'other', // FIX: Default must be in the allowed list
+    category: 'other',
   });
 
   // Check if user is staff (can manage tickets)
@@ -57,7 +58,6 @@ export default function Tickets() {
         .eq('site_id', currentSite?.id)
         .order('created_at', { ascending: false });
 
-      // If resident, only see own tickets
       if (!canManage) {
         query = query.eq('created_by', user?.id);
       }
@@ -78,7 +78,6 @@ export default function Tickets() {
   };
 
   const handleStatusChange = async (ticketId: string, newStatus: string) => {
-    // 1. Optimistic Update
     const originalTickets = [...tickets];
     setTickets(tickets.map(t => 
       t.id === ticketId ? { ...t, status: newStatus as any } : t
@@ -91,7 +90,6 @@ export default function Tickets() {
         .eq('id', ticketId);
 
       if (error) throw error;
-      
     } catch (error) {
       console.error('Failed to update status:', error);
       alert('Failed to update status');
@@ -105,7 +103,6 @@ export default function Tickets() {
 
     setSubmitting(true);
     try {
-      // 1. Try to find the user's unit (Safe fetch)
       const { data: userUnits } = await supabase
         .from('units')
         .select('id')
@@ -113,7 +110,6 @@ export default function Tickets() {
         .eq('site_id', currentSite.id)
         .limit(1);
 
-      // Admins might not have a unit, so this stays null
       const unitId = userUnits && userUnits.length > 0 ? userUnits[0].id : null;
 
       const { error } = await supabase.from('support_tickets').insert({
@@ -126,17 +122,14 @@ export default function Tickets() {
         category: formData.category,
       });
 
-      if (error) {
-        console.error('Supabase Insert Error:', error);
-        throw error;
-      }
+      if (error) throw error;
 
       setShowModal(false);
       setFormData({ title: '', description: '', priority: 'medium', category: 'other' });
       fetchTickets();
     } catch (error) {
-      console.error('Full Error Object:', error);
-      alert('Failed to create ticket. Check console for details.');
+      console.error('Ticket Create Error:', error);
+      alert('Failed to create ticket.');
     } finally {
       setSubmitting(false);
     }
@@ -223,48 +216,76 @@ export default function Tickets() {
           ) : (
             filteredTickets.map(ticket => (
               <div key={ticket.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
-                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      
-                      {/* STATUS CHANGER (Admins Only) */}
-                      {canManage ? (
-                        <select
-                          value={ticket.status}
-                          onChange={(e) => handleStatusChange(ticket.id, e.target.value)}
-                          className={`text-xs font-bold uppercase rounded-full px-3 py-1 border-2 cursor-pointer focus:ring-2 focus:ring-[#002561] focus:outline-none transition-colors ${getStatusColor(ticket.status)}`}
-                        >
-                          <option value="open">Open</option>
-                          <option value="in_progress">In Progress</option>
-                          <option value="resolved">Resolved</option>
-                          <option value="closed">Closed</option>
-                        </select>
-                      ) : (
-                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${getStatusColor(ticket.status)}`}>
-                          {ticket.status.replace('_', ' ')}
-                        </span>
-                      )}
-
+                
+                {/* 1. TOP ROW: Status and Meta */}
+                <div className="flex justify-between items-start mb-4">
+                   <div className="flex items-center gap-2">
+                      {/* Standard Badge (No longer a confusing dropdown) */}
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase ${getStatusColor(ticket.status)}`}>
+                        {ticket.status.replace('_', ' ')}
+                      </span>
                       <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium capitalize 
                         ${ticket.priority === 'high' || ticket.priority === 'urgent' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
                         {ticket.priority}
                       </span>
-                      <span className="text-xs text-gray-500 flex items-center">
-                        <Clock className="w-3 h-3 mr-1" />
-                        {format(new Date(ticket.created_at), 'MMM d, yyyy')}
-                      </span>
-                    </div>
-                    
-                    <h3 className="text-lg font-semibold text-gray-900 mb-1">{ticket.title}</h3>
-                    <p className="text-gray-600 text-sm mb-3 line-clamp-2">{ticket.description}</p>
-                    
-                    <div className="flex items-center text-xs text-gray-500 gap-4">
-                       {ticket.unit_number && <span className="font-medium text-gray-900">Unit: {ticket.unit_number}</span>}
-                       {ticket.created_by_name && <span>By: {ticket.created_by_name}</span>}
-                       <span className="italic bg-gray-50 px-2 rounded">Category: {ticket.category}</span>
-                    </div>
-                  </div>
+                   </div>
+                   <span className="text-xs text-gray-500 flex items-center">
+                      <Clock className="w-3 h-3 mr-1" />
+                      {format(new Date(ticket.created_at), 'MMM d, yyyy')}
+                   </span>
                 </div>
+
+                {/* 2. MIDDLE: Content */}
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">{ticket.title}</h3>
+                <p className="text-gray-600 text-sm mb-4">{ticket.description}</p>
+                <div className="flex items-center text-xs text-gray-500 gap-4 mb-4">
+                    {ticket.unit_number && <span className="font-medium text-gray-900">Unit: {ticket.unit_number}</span>}
+                    {ticket.created_by_name && <span>By: {ticket.created_by_name}</span>}
+                    <span className="italic bg-gray-50 px-2 rounded">Category: {ticket.category}</span>
+                </div>
+
+                {/* 3. BOTTOM: Admin Action Buttons */}
+                {canManage && (
+                  <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-100">
+                    {ticket.status === 'open' && (
+                      <button 
+                        onClick={() => handleStatusChange(ticket.id, 'in_progress')}
+                        className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded hover:bg-blue-100 transition-colors"
+                      >
+                        <PlayCircle className="w-3 h-3 mr-1" /> Start Progress
+                      </button>
+                    )}
+                    
+                    {ticket.status !== 'resolved' && ticket.status !== 'closed' && (
+                      <button 
+                        onClick={() => handleStatusChange(ticket.id, 'resolved')}
+                        className="flex items-center px-3 py-1.5 bg-green-50 text-green-700 text-xs font-medium rounded hover:bg-green-100 transition-colors"
+                      >
+                        <CheckCircle className="w-3 h-3 mr-1" /> Mark Resolved
+                      </button>
+                    )}
+
+                    {ticket.status !== 'closed' && (
+                      <button 
+                        onClick={() => handleStatusChange(ticket.id, 'closed')}
+                        className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-medium rounded hover:bg-gray-100 transition-colors ml-auto"
+                      >
+                        <XCircle className="w-3 h-3 mr-1" /> Close Ticket
+                      </button>
+                    )}
+                    
+                    {/* If closed, allow reopen */}
+                    {ticket.status === 'closed' && (
+                      <button 
+                        onClick={() => handleStatusChange(ticket.id, 'open')}
+                        className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-medium rounded hover:bg-gray-100 transition-colors ml-auto"
+                      >
+                         Reopen
+                      </button>
+                    )}
+                  </div>
+                )}
+                
               </div>
             ))
           )}
@@ -284,37 +305,18 @@ export default function Tickets() {
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-1">Title</label>
-                <input 
-                  required
-                  type="text" 
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
-                  placeholder="e.g., Leaking pipe in kitchen"
-                  value={formData.title}
-                  onChange={e => setFormData({...formData, title: e.target.value})}
-                />
+                <input required type="text" className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]" placeholder="e.g., Leaking pipe" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} />
               </div>
 
               <div>
                 <label className="block text-sm font-medium mb-1">Description</label>
-                <textarea 
-                  required
-                  rows={3}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
-                  placeholder="Describe the issue in detail..."
-                  value={formData.description}
-                  onChange={e => setFormData({...formData, description: e.target.value})}
-                />
+                <textarea required rows={3} className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]" placeholder="Describe the issue..." value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">Category</label>
-                  <select 
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
-                    value={formData.category}
-                    onChange={e => setFormData({...formData, category: e.target.value})}
-                  >
-                    {/* FIXED: Options match DB Constraints EXACTLY */}
+                  <select className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]" value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})}>
                     <option value="plumbing">Plumbing</option>
                     <option value="electrical">Electrical</option>
                     <option value="elevator">Elevator</option>
@@ -327,11 +329,7 @@ export default function Tickets() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Priority</label>
-                  <select 
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
-                    value={formData.priority}
-                    onChange={e => setFormData({...formData, priority: e.target.value as any})}
-                  >
+                  <select className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]" value={formData.priority} onChange={e => setFormData({...formData, priority: e.target.value as any})}>
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
                     <option value="high">High</option>
