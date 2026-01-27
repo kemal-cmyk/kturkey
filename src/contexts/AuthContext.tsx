@@ -39,9 +39,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .eq('id', userId)
       .maybeSingle();
     setProfile(data);
-    const superAdmin = data?.is_super_admin || false;
-    setIsSuperAdmin(superAdmin);
-    return superAdmin;
+    setIsSuperAdmin(data?.is_super_admin || false);
+    return data?.is_super_admin || false;
   };
 
   const fetchSites = async (userId: string, superAdmin: boolean) => {
@@ -66,22 +65,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setSites(userSites);
 
-    // LOGIC FIX: Always allow updating the current site data if it exists
-    // This ensures that if you change a site name, it reflects immediately
     if (userSites.length > 0) {
       const storedSiteId = localStorage.getItem('currentSiteId');
+      // If we already have a site selected and it's valid, keep it
+      // Otherwise, try to find the stored one, or default to the first one
+      let targetSite = currentSite;
       
-      // Try to find stored site, otherwise fallback to first site
-      const targetSite = userSites.find(s => s.id === storedSiteId) || userSites[0];
+      if (!targetSite || !userSites.find(s => s.id === targetSite?.id)) {
+         targetSite = userSites.find(s => s.id === storedSiteId) || userSites[0];
+      }
 
-      setCurrentSite(targetSite);
+      // Only update state if it actually changed to prevent flickers
+      if (targetSite && targetSite.id !== currentSite?.id) {
+        setCurrentSite(targetSite);
         
-      // Determine Role
-      if (superAdmin) {
-        setCurrentRole({ role: 'admin' } as UserSiteRole);
-      } else {
-        const role = roles.find((r: any) => r.site_id === targetSite.id);
-        setCurrentRole(role || null);
+        if (superAdmin) {
+          setCurrentRole({ role: 'admin' } as UserSiteRole);
+        } else {
+          const role = roles.find((r: any) => r.site_id === targetSite?.id);
+          setCurrentRole(role || null);
+        }
       }
     }
   };
@@ -93,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // 1. Initial Session Check
+    // 1. Check active session on load
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -104,17 +107,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    // 2. Event Listener - BALANCED
+    // 2. Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // 🛡️ SAFETY FIX: Ignore token refreshes to prevent infinite loops
+      if (event === 'TOKEN_REFRESHED') return;
+
       setSession(session);
       setUser(session?.user ?? null);
-
-      // We still ignore 'TOKEN_REFRESHED' to prevent infinite loops.
-      // But we allow 'SIGNED_IN', 'INITIAL_SESSION', and 'USER_UPDATED'
-      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
-        if (session?.user) {
-          const superAdmin = await fetchProfile(session.user.id);
-          await fetchSites(session.user.id, superAdmin);
+      
+      if (session?.user) {
+        // Only re-fetch if we signed in or updated the user account
+        if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
+            const superAdmin = await fetchProfile(session.user.id);
+            await fetchSites(session.user.id, superAdmin);
         }
       } else if (event === 'SIGNED_OUT') {
         setProfile(null);
@@ -130,9 +135,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleSetCurrentSite = (site: Site) => {
-    // REMOVED THE STRICT CHECK HERE.
-    // We allow setting the site even if IDs match, so data refreshes.
-    
     setCurrentSite(site);
     localStorage.setItem('currentSiteId', site.id);
 
@@ -176,3 +178,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       user,
       session,
+      profile,
+      isSuperAdmin,
+      sites,
+      currentSite,
+      currentRole,
+      userRole: currentRole?.role || null,
+      loading,
+      signIn,
+      signUp,
+      signOut,
+      setCurrentSite: handleSetCurrentSite,
+      refreshSites,
+    }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  const context = useContext(AuthContext);
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+}
