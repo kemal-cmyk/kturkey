@@ -67,22 +67,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (userSites.length > 0) {
       const storedSiteId = localStorage.getItem('currentSiteId');
-      // If we already have a site selected and it's valid, keep it
-      // Otherwise, try to find the stored one, or default to the first one
-      let targetSite = currentSite;
-      
-      if (!targetSite || !userSites.find(s => s.id === targetSite?.id)) {
-         targetSite = userSites.find(s => s.id === storedSiteId) || userSites[0];
-      }
+      const storedSite = userSites.find(s => s.id === storedSiteId);
 
-      // Only update state if it actually changed to prevent flickers
-      if (targetSite && targetSite.id !== currentSite?.id) {
-        setCurrentSite(targetSite);
-        
+      if (storedSite) {
+        setCurrentSite(storedSite);
         if (superAdmin) {
           setCurrentRole({ role: 'admin' } as UserSiteRole);
         } else {
-          const role = roles.find((r: any) => r.site_id === targetSite?.id);
+          const role = roles.find((r: any) => r.site_id === storedSite.id);
+          setCurrentRole(role || null);
+        }
+      } else {
+        setCurrentSite(userSites[0]);
+        if (superAdmin) {
+          setCurrentRole({ role: 'admin' } as UserSiteRole);
+        } else {
+          const role = roles.find((r: any) => r.site_id === userSites[0].id);
           setCurrentRole(role || null);
         }
       }
@@ -96,7 +96,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    // 1. Check active session on load
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -107,27 +106,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    // 2. Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // 🛡️ SAFETY FIX: Ignore token refreshes to prevent infinite loops
-      if (event === 'TOKEN_REFRESHED') return;
-
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       setUser(session?.user ?? null);
-      
       if (session?.user) {
-        // Only re-fetch if we signed in or updated the user account
-        if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'INITIAL_SESSION') {
-            const superAdmin = await fetchProfile(session.user.id);
-            await fetchSites(session.user.id, superAdmin);
-        }
-      } else if (event === 'SIGNED_OUT') {
+        (async () => {
+          const superAdmin = await fetchProfile(session.user.id);
+          await fetchSites(session.user.id, superAdmin);
+        })();
+      } else {
         setProfile(null);
         setIsSuperAdmin(false);
         setSites([]);
         setCurrentSite(null);
         setCurrentRole(null);
-        setLoading(false);
       }
     });
 
