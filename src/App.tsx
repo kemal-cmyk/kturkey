@@ -25,6 +25,7 @@ import UserManagement from './pages/UserManagement';
 import LanguageSettings from './pages/LanguageSettings';
 import RoleSettings from './pages/RoleSettings';
 import { Loader2 } from 'lucide-react';
+import ResidentStatement from './pages/ResidentStatement';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -277,6 +278,12 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
+      <Route
+        path="/resident-statement"
+        element={
+        <ResidentStatement />
+        }
+        />
       <Route path="/" element={<Navigate to="/dashboard" replace />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
