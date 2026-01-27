@@ -150,19 +150,25 @@ export default function MonthlyIncomeExpenses() {
       }
     });
 
-    const incomeRowsData: CategoryRow[] = Array.from(incomeCategoryMap.entries()).map(([category, data]) => ({
-      category,
-      monthlyValues: data.values,
-      total: data.values.reduce((sum, val) => sum + val, 0),
-      transactions: data.transactions.sort((a, b) => a.date.localeCompare(b.date)),
-    }));
+    // --- UPDATED LOGIC HERE: Filter out rows with 0 total ---
+    const incomeRowsData: CategoryRow[] = Array.from(incomeCategoryMap.entries())
+      .map(([category, data]) => ({
+        category,
+        monthlyValues: data.values,
+        total: data.values.reduce((sum, val) => sum + val, 0),
+        transactions: data.transactions.sort((a, b) => a.date.localeCompare(b.date)),
+      }))
+      .filter(row => row.total !== 0); // Hide empty income categories
 
-    const expenseRowsData: CategoryRow[] = Array.from(expenseCategoryMap.entries()).map(([category, data]) => ({
-      category,
-      monthlyValues: data.values,
-      total: data.values.reduce((sum, val) => sum + val, 0),
-      transactions: data.transactions.sort((a, b) => a.date.localeCompare(b.date)),
-    }));
+    const expenseRowsData: CategoryRow[] = Array.from(expenseCategoryMap.entries())
+      .map(([category, data]) => ({
+        category,
+        monthlyValues: data.values,
+        total: data.values.reduce((sum, val) => sum + val, 0),
+        transactions: data.transactions.sort((a, b) => a.date.localeCompare(b.date)),
+      }))
+      .filter(row => row.total !== 0); // Hide empty expense categories
+    // --------------------------------------------------------
 
     const monthlyIncomeTotal = new Array(monthsInPeriod.length).fill(0);
     const monthlyExpenseTotal = new Array(monthsInPeriod.length).fill(0);
@@ -221,7 +227,6 @@ export default function MonthlyIncomeExpenses() {
 
   const totalIncome = incomeRows.reduce((sum, row) => sum + row.total, 0);
   const totalExpenses = expenseRows.reduce((sum, row) => sum + row.total, 0);
-  const netBalance = totalIncome - totalExpenses;
   const closingBalance = monthlyTotals.closingBalance.length > 0
     ? monthlyTotals.closingBalance[monthlyTotals.closingBalance.length - 1]
     : openingBalance;
@@ -336,7 +341,8 @@ export default function MonthlyIncomeExpenses() {
                   <th className="px-4 py-3 text-left sticky left-0 bg-gray-50 z-10 border-r border-gray-300">
                   </th>
                   {months.map((month, idx) => (
-                    <th key={idx} className="px-3 py-3 border-r border-gray-200">
+                    <th key={idx} className="px-3 py-3 border-r border-gray-200 text-center font-medium text-gray-700">
+                        {format(month, 'MMM yy')}
                     </th>
                   ))}
                   <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase whitespace-nowrap bg-gray-100">
