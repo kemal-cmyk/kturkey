@@ -22,7 +22,8 @@ interface Ticket {
 }
 
 export default function Tickets() {
-  const { user, currentSite, role } = useAuth();
+  // Added isSuperAdmin to ensure you can always see the buttons
+  const { user, currentSite, role, isSuperAdmin } = useAuth();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -30,7 +31,6 @@ export default function Tickets() {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   
-  // Form State
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -38,8 +38,9 @@ export default function Tickets() {
     category: 'other',
   });
 
-  // Check if user is staff (can manage tickets)
-  const canManage = ['admin', 'manager', 'board_member', 'staff'].includes(role || '');
+  // PERMISSION CHECK:
+  // Visible if you are Super Admin OR have a management role
+  const canManage = isSuperAdmin || ['admin', 'manager', 'board_member', 'staff'].includes(role || '');
 
   useEffect(() => {
     if (currentSite) fetchTickets();
@@ -58,6 +59,7 @@ export default function Tickets() {
         .eq('site_id', currentSite?.id)
         .order('created_at', { ascending: false });
 
+      // If resident (and not admin), only see own tickets
       if (!canManage) {
         query = query.eq('created_by', user?.id);
       }
@@ -79,6 +81,7 @@ export default function Tickets() {
 
   const handleStatusChange = async (ticketId: string, newStatus: string) => {
     const originalTickets = [...tickets];
+    // Optimistic UI Update
     setTickets(tickets.map(t => 
       t.id === ticketId ? { ...t, status: newStatus as any } : t
     ));
@@ -167,10 +170,7 @@ export default function Tickets() {
               </p>
             </div>
           </div>
-          <button 
-            onClick={() => setShowModal(true)}
-            className="flex items-center justify-center space-x-2 bg-[#002561] text-white px-4 py-2 rounded-lg hover:bg-[#003875] transition-colors"
-          >
+          <button onClick={() => setShowModal(true)} className="flex items-center justify-center space-x-2 bg-[#002561] text-white px-4 py-2 rounded-lg hover:bg-[#003875] transition-colors">
             <Plus className="w-5 h-5" />
             <span>New Ticket</span>
           </button>
@@ -180,21 +180,11 @@ export default function Tickets() {
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search tickets..."
-              className="w-full pl-9 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+            <input type="text" placeholder="Search tickets..." className="w-full pl-9 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
           </div>
           <div className="flex items-center space-x-2">
             <Filter className="w-4 h-4 text-gray-400" />
-            <select 
-              className="border rounded-lg px-3 py-2 focus:ring-2 focus:ring-[#002561]"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
+            <select className="border rounded-lg px-3 py-2 focus:ring-2 focus:ring-[#002561]" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="all">All Status</option>
               <option value="open">Open</option>
               <option value="in_progress">In Progress</option>
@@ -220,7 +210,6 @@ export default function Tickets() {
                 {/* 1. TOP ROW: Status and Meta */}
                 <div className="flex justify-between items-start mb-4">
                    <div className="flex items-center gap-2">
-                      {/* Standard Badge (No longer a confusing dropdown) */}
                       <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase ${getStatusColor(ticket.status)}`}>
                         {ticket.status.replace('_', ' ')}
                       </span>
@@ -244,42 +233,29 @@ export default function Tickets() {
                     <span className="italic bg-gray-50 px-2 rounded">Category: {ticket.category}</span>
                 </div>
 
-                {/* 3. BOTTOM: Admin Action Buttons */}
+                {/* 3. BOTTOM: Admin Action Buttons (THE NEW FEATURE) */}
                 {canManage && (
                   <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-100">
                     {ticket.status === 'open' && (
-                      <button 
-                        onClick={() => handleStatusChange(ticket.id, 'in_progress')}
-                        className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded hover:bg-blue-100 transition-colors"
-                      >
+                      <button onClick={() => handleStatusChange(ticket.id, 'in_progress')} className="flex items-center px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded hover:bg-blue-100 transition-colors">
                         <PlayCircle className="w-3 h-3 mr-1" /> Start Progress
                       </button>
                     )}
                     
                     {ticket.status !== 'resolved' && ticket.status !== 'closed' && (
-                      <button 
-                        onClick={() => handleStatusChange(ticket.id, 'resolved')}
-                        className="flex items-center px-3 py-1.5 bg-green-50 text-green-700 text-xs font-medium rounded hover:bg-green-100 transition-colors"
-                      >
+                      <button onClick={() => handleStatusChange(ticket.id, 'resolved')} className="flex items-center px-3 py-1.5 bg-green-50 text-green-700 text-xs font-medium rounded hover:bg-green-100 transition-colors">
                         <CheckCircle className="w-3 h-3 mr-1" /> Mark Resolved
                       </button>
                     )}
 
                     {ticket.status !== 'closed' && (
-                      <button 
-                        onClick={() => handleStatusChange(ticket.id, 'closed')}
-                        className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-medium rounded hover:bg-gray-100 transition-colors ml-auto"
-                      >
+                      <button onClick={() => handleStatusChange(ticket.id, 'closed')} className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-medium rounded hover:bg-gray-100 transition-colors ml-auto">
                         <XCircle className="w-3 h-3 mr-1" /> Close Ticket
                       </button>
                     )}
                     
-                    {/* If closed, allow reopen */}
                     {ticket.status === 'closed' && (
-                      <button 
-                        onClick={() => handleStatusChange(ticket.id, 'open')}
-                        className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-medium rounded hover:bg-gray-100 transition-colors ml-auto"
-                      >
+                      <button onClick={() => handleStatusChange(ticket.id, 'open')} className="flex items-center px-3 py-1.5 bg-gray-50 text-gray-600 text-xs font-medium rounded hover:bg-gray-100 transition-colors ml-auto">
                          Reopen
                       </button>
                     )}
