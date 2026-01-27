@@ -12,7 +12,7 @@ interface Ticket {
   title: string;
   description: string;
   status: 'open' | 'in_progress' | 'resolved' | 'closed';
-  priority: 'low' | 'medium' | 'high' | 'critical';
+  priority: 'low' | 'medium' | 'high' | 'urgent'; // Updated to match DB (urgent vs critical)
   category: string;
   created_at: string;
   updated_at: string;
@@ -34,7 +34,7 @@ export default function Tickets() {
     title: '',
     description: '',
     priority: 'medium',
-    category: 'maintenance',
+    category: 'other', // FIX: Default must be in the allowed list
   });
 
   // Check if user is staff (can manage tickets)
@@ -47,7 +47,6 @@ export default function Tickets() {
   const fetchTickets = async () => {
     try {
       setLoading(true);
-      // FIX 1: Changed 'tickets' to 'support_tickets'
       let query = supabase
         .from('support_tickets') 
         .select(`
@@ -70,7 +69,7 @@ export default function Tickets() {
         ...t,
         created_by_name: t.profiles?.full_name,
         unit_number: t.units?.unit_number
-      })));
+      })) as Ticket[]);
     } catch (error) {
       console.error('Error fetching tickets:', error);
     } finally {
@@ -86,7 +85,6 @@ export default function Tickets() {
     ));
 
     try {
-      // FIX 2: Changed 'tickets' to 'support_tickets'
       const { error } = await supabase
         .from('support_tickets')
         .update({ status: newStatus })
@@ -118,7 +116,6 @@ export default function Tickets() {
       // Admins might not have a unit, so this stays null
       const unitId = userUnits && userUnits.length > 0 ? userUnits[0].id : null;
 
-      // FIX 3: Changed 'tickets' to 'support_tickets'
       const { error } = await supabase.from('support_tickets').insert({
         site_id: currentSite.id,
         created_by: user.id,
@@ -135,11 +132,11 @@ export default function Tickets() {
       }
 
       setShowModal(false);
-      setFormData({ title: '', description: '', priority: 'medium', category: 'maintenance' });
+      setFormData({ title: '', description: '', priority: 'medium', category: 'other' });
       fetchTickets();
     } catch (error) {
       console.error('Full Error Object:', error);
-      alert('Failed to create ticket.');
+      alert('Failed to create ticket. Check console for details.');
     } finally {
       setSubmitting(false);
     }
@@ -249,7 +246,7 @@ export default function Tickets() {
                       )}
 
                       <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium capitalize 
-                        ${ticket.priority === 'high' || ticket.priority === 'critical' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
+                        ${ticket.priority === 'high' || ticket.priority === 'urgent' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
                         {ticket.priority}
                       </span>
                       <span className="text-xs text-gray-500 flex items-center">
@@ -264,6 +261,7 @@ export default function Tickets() {
                     <div className="flex items-center text-xs text-gray-500 gap-4">
                        {ticket.unit_number && <span className="font-medium text-gray-900">Unit: {ticket.unit_number}</span>}
                        {ticket.created_by_name && <span>By: {ticket.created_by_name}</span>}
+                       <span className="italic bg-gray-50 px-2 rounded">Category: {ticket.category}</span>
                     </div>
                   </div>
                 </div>
@@ -316,10 +314,14 @@ export default function Tickets() {
                     value={formData.category}
                     onChange={e => setFormData({...formData, category: e.target.value})}
                   >
-                    <option value="maintenance">Maintenance</option>
-                    <option value="security">Security</option>
+                    {/* FIXED: Options match DB Constraints EXACTLY */}
+                    <option value="plumbing">Plumbing</option>
+                    <option value="electrical">Electrical</option>
+                    <option value="elevator">Elevator</option>
                     <option value="cleaning">Cleaning</option>
-                    <option value="administrative">Administrative</option>
+                    <option value="security">Security</option>
+                    <option value="garden">Garden/Landscape</option>
+                    <option value="parking">Parking</option>
                     <option value="other">Other</option>
                   </select>
                 </div>
@@ -333,7 +335,7 @@ export default function Tickets() {
                     <option value="low">Low</option>
                     <option value="medium">Medium</option>
                     <option value="high">High</option>
-                    <option value="critical">Critical</option>
+                    <option value="urgent">Urgent</option>
                   </select>
                 </div>
               </div>
