@@ -39,8 +39,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .eq('id', userId)
       .maybeSingle();
     setProfile(data);
-    setIsSuperAdmin(data?.is_super_admin || false);
-    return data?.is_super_admin || false;
+    const superAdmin = data?.is_super_admin || false;
+    setIsSuperAdmin(superAdmin);
+    return superAdmin;
   };
 
   const fetchSites = async (userId: string, superAdmin: boolean) => {
@@ -65,24 +66,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     setSites(userSites);
 
+    // LOGIC FIX: Only update Current Site if strictly necessary to avoid re-renders
     if (userSites.length > 0) {
       const storedSiteId = localStorage.getItem('currentSiteId');
-      const storedSite = userSites.find(s => s.id === storedSiteId);
+      
+      // Try to find stored site, otherwise fallback to first site
+      const targetSite = userSites.find(s => s.id === storedSiteId) || userSites[0];
 
-      if (storedSite) {
-        setCurrentSite(storedSite);
+      // CRITICAL: Only call setCurrentSite if the ID actually changed!
+      if (!currentSite || currentSite.id !== targetSite.id) {
+        setCurrentSite(targetSite);
+        
+        // Determine Role
         if (superAdmin) {
           setCurrentRole({ role: 'admin' } as UserSiteRole);
         } else {
-          const role = roles.find((r: any) => r.site_id === storedSite.id);
-          setCurrentRole(role || null);
-        }
-      } else {
-        setCurrentSite(userSites[0]);
-        if (superAdmin) {
-          setCurrentRole({ role: 'admin' } as UserSiteRole);
-        } else {
-          const role = roles.find((r: any) => r.site_id === userSites[0].id);
+          const role = roles.find((r: any) => r.site_id === targetSite.id);
           setCurrentRole(role || null);
         }
       }
@@ -96,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    // 1. Initial Session Check
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -106,20 +106,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    // 2. Event Listener - OPTIMIZED
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      // Always update basic session state
       setSession(session);
       setUser(session?.user ?? null);
-      if (session?.user) {
-        (async () => {
+
+      // ONLY fetch data on specific events (Login or Initial Load)
+      // We IGNORE 'TOKEN_REFRESHED' to stop the "ghost refreshing"
+      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+        if (session?.user) {
           const superAdmin = await fetchProfile(session.user.id);
           await fetchSites(session.user.id, superAdmin);
-        })();
-      } else {
+        }
+      } else if (event === 'SIGNED_OUT') {
         setProfile(null);
         setIsSuperAdmin(false);
         setSites([]);
         setCurrentSite(null);
         setCurrentRole(null);
+        setLoading(false);
       }
     });
 
@@ -127,6 +133,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const handleSetCurrentSite = (site: Site) => {
+    // Optimization: Don't do anything if we are already on this site
+    if (currentSite?.id === site.id) return;
+
     setCurrentSite(site);
     localStorage.setItem('currentSiteId', site.id);
 
