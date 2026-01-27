@@ -58,6 +58,7 @@ export default function Layout({ children }: LayoutProps) {
   const navigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Units', href: '/units', icon: Home },
+    { name: 'Resident Statement', href: '/resident-statement', icon: FileText },
     { name: 'Residents', href: '/residents', icon: Users },
     { name: 'Financial Periods', href: '/fiscal-periods', icon: Calendar },
     { name: 'Budget', href: '/budget', icon: Wallet },
