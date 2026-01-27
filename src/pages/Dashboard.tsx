@@ -9,7 +9,7 @@ import {
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Users,
-  Building2, Receipt, ArrowRight, Loader2,
+  Building2, Calendar, Receipt, ArrowRight, Loader2,
   ChevronRight, Scale, MessageSquare, Home
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -20,16 +20,15 @@ export default function Dashboard() {
   const { currentSite, currentRole } = useAuth();
   const [loading, setLoading] = useState(true);
   
-  // Data States
+  // Financial Data State
   const [summary, setSummary] = useState<SiteFinancialSummary | null>(null);
   const [debtAlerts, setDebtAlerts] = useState<DebtAlert[]>([]);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
-  
-  // ✅ FIX: We store full entries to calculate the totals live
-  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]); 
+  const [periodEntries, setPeriodEntries] = useState<LedgerEntry[]>([]); // ✅ Added for Math Fix
   const [monthlyData, setMonthlyData] = useState<any[]>([]);
 
+  // Operational Data State
   const [opsStats, setOpsStats] = useState({
     openTickets: 0,
     occupiedUnits: 0,
@@ -51,7 +50,7 @@ export default function Dashboard() {
     setLoading(true);
 
     try {
-      // 1. Fetch Active Period
+      // 1. Fetch Active Period & Financials
       const { data: periods } = await supabase
         .from('fiscal_periods')
         .select('*')
@@ -79,28 +78,27 @@ export default function Dashboard() {
           .order('display_order');
         setBudgetCategories(categories || []);
 
-        // ✅ FIX: Fetch ALL Ledger Entries for this period (needed for accurate live calc)
+        // Ledger Data (Charts)
         const { data: ledgerData } = await supabase
           .from('ledger_entries')
-          .select('*')
+          .select('*') // ✅ Changed to select ALL columns for accurate math
           .eq('site_id', currentSite.id)
           .eq('fiscal_period_id', periods.id)
           .order('entry_date');
 
         setPeriodEntries(ledgerData || []);
 
-        // Prepare Monthly Chart Data
         const grouped: Record<string, { income: number; expense: number }> = {};
         ledgerData?.forEach(entry => {
           const month = format(new Date(entry.entry_date), 'MMM');
           if (!grouped[month]) grouped[month] = { income: 0, expense: 0 };
           
-          // Use the TRY reporting amount for accurate charts
+          // ✅ FIX: Use Reporting Amount (TL) for charts
           const amount = Number(entry.amount_reporting_try || entry.amount);
-          
+
           if (entry.entry_type === 'income') {
             grouped[month].income += amount;
-          } else if (entry.entry_type === 'expense') {
+          } else {
             grouped[month].expense += amount;
           }
         });
@@ -109,7 +107,7 @@ export default function Dashboard() {
         })));
       }
 
-      // 2. Fetch Debt Alerts
+      // 2. Fetch Debt Alerts (Admin Only)
       if (isAdmin || isBoardMember) {
         const { data: alerts } = await supabase
           .from('debt_alerts')
@@ -120,7 +118,7 @@ export default function Dashboard() {
         setDebtAlerts(alerts || []);
       }
 
-      // 3. Fetch Ops Stats
+      // 3. Fetch Operational Stats
       const { count: ticketCount } = await supabase
         .from('support_tickets')
         .select('*', { count: 'exact', head: true })
@@ -132,18 +130,21 @@ export default function Dashboard() {
         .select('id, owner_id')
         .eq('site_id', currentSite.id);
       
+      const totalUnits = units?.length || 0;
+      const occupiedUnits = units?.filter(u => u.owner_id !== null).length || 0;
+
       const { data: users } = await supabase
         .rpc('get_site_users', { p_site_id: currentSite.id });
 
       setOpsStats({
         openTickets: ticketCount || 0,
-        totalUnits: units?.length || 0,
-        occupiedUnits: units?.filter(u => u.owner_id).length || 0,
+        totalUnits,
+        occupiedUnits,
         totalResidents: users ? users.length : 0
       });
 
     } catch (error) {
-      console.error('Error fetching dashboard:', error);
+      console.error('Error fetching dashboard data:', error);
     } finally {
       setLoading(false);
     }
@@ -164,23 +165,7 @@ export default function Dashboard() {
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
     : 0;
 
-  // ✅ FIX: Calculate Actual Spent dynamically from ledger entries (Base Currency Logic)
-  const budgetData = budgetCategories.map((cat, idx) => {
-    const actualSpent = periodEntries
-      .filter(e => e.category === cat.category_name)
-      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-    return {
-      name: cat.category_name,
-      planned: Number(cat.planned_amount),
-      actual: actualSpent,
-      color: COLORS[idx % COLORS.length],
-    };
-  });
-
-  const pieData = budgetData
-    .map(d => ({ name: d.name, value: d.actual, color: d.color }))
-    .filter(d => d.value > 0);
+  // --- RENDER ---
 
   if (!currentSite) {
     return (
@@ -207,6 +192,26 @@ export default function Dashboard() {
     );
   }
 
+  // ✅ FIX: Calculate budget data live from ledger entries
+  const budgetData = budgetCategories.map((cat, idx) => {
+    const actualSpent = periodEntries
+      .filter(e => e.category === cat.category_name)
+      .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+    return {
+      name: cat.category_name,
+      planned: Number(cat.planned_amount),
+      actual: actualSpent,
+      color: COLORS[idx % COLORS.length],
+    };
+  });
+
+  const pieData = budgetData.map((data, idx) => ({
+    name: data.name,
+    value: data.actual,
+    color: COLORS[idx % COLORS.length],
+  })).filter(d => d.value > 0);
+
   return (
     <div className="p-6 space-y-6">
       
@@ -225,27 +230,63 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard title="Total Budget" value={formatCurrency(summary?.total_budget || 0)} icon={<Receipt className="w-5 h-5" />} color="bg-[#002561]" />
-        <StatCard title="Total Collected" value={formatCurrency(summary?.total_collected || 0)} subtitle={`${summary?.collection_rate || 0}% collection rate`} icon={<TrendingUp className="w-5 h-5" />} color="bg-green-600" />
-        <StatCard title="Total Spent" value={formatCurrency(summary?.actual_expenses || 0)} subtitle={`${summary?.budget_utilization || 0}% of budget`} icon={<TrendingDown className="w-5 h-5" />} color="bg-orange-500" />
-      </div>
-
+      {/* SECTION 1: Operational Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Link to="/tickets" className="block">
-           <StatCard title="Open Tickets" value={String(opsStats.openTickets)} subtitle="Action Needed" icon={<MessageSquare className="w-5 h-5" />} color={opsStats.openTickets > 0 ? "bg-red-500" : "bg-blue-500"} />
+          <StatCard
+            title="Open Tickets"
+            value={String(opsStats.openTickets)}
+            subtitle="Action Needed"
+            icon={<MessageSquare className="w-5 h-5" />}
+            color={opsStats.openTickets > 0 ? "bg-red-500" : "bg-blue-500"}
+          />
         </Link>
-        <StatCard title="Occupancy Rate" value={`${occupancyRate}%`} subtitle={`${opsStats.occupiedUnits}/${opsStats.totalUnits} Units`} icon={<Home className="w-5 h-5" />} color="bg-purple-500" />
+        <StatCard
+          title="Occupancy Rate"
+          value={`${occupancyRate}%`}
+          subtitle={`${opsStats.occupiedUnits} / ${opsStats.totalUnits} Units Occupied`}
+          icon={<Home className="w-5 h-5" />}
+          color="bg-purple-500"
+        />
         <Link to="/users" className="block">
-            <StatCard title="Residents" value={String(opsStats.totalResidents)} subtitle="Registered" icon={<Users className="w-5 h-5" />} color="bg-indigo-500" />
+          <StatCard
+            title="Total Residents"
+            value={String(opsStats.totalResidents)}
+            subtitle="Registered Users"
+            icon={<Users className="w-5 h-5" />}
+            color="bg-indigo-500"
+          />
         </Link>
       </div>
 
-      {/* Charts Section */}
+      {/* SECTION 2: Financial Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <StatCard
+          title="Total Budget"
+          value={formatCurrency(summary?.total_budget || 0)}
+          icon={<Receipt className="w-5 h-5" />}
+          color="bg-[#002561]"
+        />
+        <StatCard
+          title="Total Collected"
+          value={formatCurrency(summary?.total_collected || 0)}
+          subtitle={`${summary?.collection_rate || 0}% collection rate`}
+          icon={<TrendingUp className="w-5 h-5" />}
+          color="bg-green-600"
+        />
+        <StatCard
+          title="Total Spent"
+          value={formatCurrency(summary?.actual_expenses || 0)}
+          subtitle={`${summary?.budget_utilization || 0}% of budget`}
+          icon={<TrendingDown className="w-5 h-5" />}
+          color="bg-orange-500"
+        />
+      </div>
+
+      {/* SECTION 3: Charts & Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
-        {/* Budget Chart */}
+        {/* Budget Bar Chart */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Budget Utilization</h3>
           {budgetData.length > 0 ? (
@@ -263,7 +304,7 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">No budget data</div>
+            <div className="h-[300px] flex items-center justify-center text-gray-500">No budget data available</div>
           )}
         </div>
 
@@ -283,7 +324,7 @@ export default function Dashboard() {
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">No expense data</div>
+            <div className="h-[300px] flex items-center justify-center text-gray-500">No expense data available</div>
           )}
         </div>
       </div>
@@ -324,12 +365,12 @@ export default function Dashboard() {
             {debtAlerts.slice(0, 5).map((alert) => (
               <div key={alert.workflow_id} className="px-6 py-4 flex items-center justify-between hover:bg-gray-50">
                 <div className="flex items-center space-x-4">
-                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${alert.stage === 4 ? 'bg-red-100' : 'bg-yellow-100'}`}>
-                    {alert.stage === 4 ? <Scale className="w-5 h-5 text-red-600" /> : <AlertTriangle className="w-5 h-5 text-orange-600" />}
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${alert.stage === 4 ? 'bg-red-100' : alert.stage === 3 ? 'bg-orange-100' : 'bg-yellow-100'}`}>
+                    {alert.stage === 4 ? <Scale className="w-5 h-5 text-red-600" /> : <AlertTriangle className={`w-5 h-5 ${alert.stage === 3 ? 'text-orange-600' : 'text-yellow-600'}`} />}
                   </div>
                   <div>
                     <p className="font-medium text-gray-900">{alert.block ? `${alert.block}-` : ''}{alert.unit_number}</p>
-                    <p className="text-sm text-gray-500">{alert.owner_name || 'Unknown'}</p>
+                    <p className="text-sm text-gray-500">{alert.owner_name || 'Unknown Owner'}</p>
                   </div>
                 </div>
                 <div className="text-right">
