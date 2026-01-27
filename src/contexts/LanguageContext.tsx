@@ -1,15 +1,18 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabase';
-import { translations as translationsData, Language as TranslationLanguage } from '../lib/translations';
+import { translations as staticTranslations, Language as TranslationLanguage } from '../lib/translations';
 
-export type Language = 'en' | 'tr' | 'de' | 'ru';
+export type Language = 'en' | 'tr' | 'ru' | 'de' | 'nl' | 'fa' | 'no' | 'sv' | 'fi' | 'da';
+
+const SUPPORTED_LANGUAGES: Language[] = ['en', 'tr', 'ru', 'de', 'nl', 'fa', 'no', 'sv', 'fi', 'da'];
 
 interface LanguageContextType {
   language: Language;
   setLanguage: (lang: Language) => void;
   t: (key: string) => string;
   updateLanguageInDB: (lang: Language) => Promise<void>;
+  reloadTranslations: () => Promise<void>;
 }
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
@@ -17,12 +20,18 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [language, setLanguageState] = useState<Language>('en');
+  const [dbTranslations, setDbTranslations] = useState<Record<string, Record<Language, string>>>({});
+  const [translationsLoaded, setTranslationsLoaded] = useState(false);
 
   useEffect(() => {
     const savedLang = localStorage.getItem('app_language') as Language;
-    if (savedLang && ['en', 'tr', 'de', 'ru'].includes(savedLang)) {
+    if (savedLang && SUPPORTED_LANGUAGES.includes(savedLang)) {
       setLanguageState(savedLang);
     }
+  }, []);
+
+  useEffect(() => {
+    loadTranslationsFromDB();
   }, []);
 
   useEffect(() => {
@@ -30,6 +39,47 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       loadUserLanguage();
     }
   }, [user]);
+
+  const loadTranslationsFromDB = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('app_translations')
+        .select('*');
+
+      if (error) {
+        console.error('Failed to load translations from database:', error);
+        setTranslationsLoaded(true);
+        return;
+      }
+
+      if (data) {
+        const translationsMap: Record<string, Record<Language, string>> = {};
+        data.forEach((row: any) => {
+          translationsMap[row.key] = {
+            en: row.en || '',
+            tr: row.tr || '',
+            ru: row.ru || '',
+            de: row.de || '',
+            nl: row.nl || '',
+            fa: row.fa || '',
+            no: row.no || '',
+            sv: row.sv || '',
+            fi: row.fi || '',
+            da: row.da || '',
+          };
+        });
+        setDbTranslations(translationsMap);
+      }
+      setTranslationsLoaded(true);
+    } catch (err) {
+      console.error('Error loading translations:', err);
+      setTranslationsLoaded(true);
+    }
+  };
+
+  const reloadTranslations = async () => {
+    await loadTranslationsFromDB();
+  };
 
   const loadUserLanguage = async () => {
     if (!user) return;
@@ -40,7 +90,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       .eq('id', user.id)
       .maybeSingle();
 
-    if (data?.language && ['en', 'tr', 'de', 'ru'].includes(data.language)) {
+    if (data?.language && SUPPORTED_LANGUAGES.includes(data.language as Language)) {
       const lang = data.language as Language;
       setLanguageState(lang);
       localStorage.setItem('app_language', lang);
@@ -64,13 +114,20 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   };
 
   const t = (key: string): string => {
-    const langData = translationsData[language];
-    if (!langData) return key;
-    return langData[key] || key;
+    if (translationsLoaded && dbTranslations[key] && dbTranslations[key][language]) {
+      return dbTranslations[key][language];
+    }
+
+    const staticLangData = staticTranslations[language];
+    if (staticLangData && staticLangData[key]) {
+      return staticLangData[key];
+    }
+
+    return key;
   };
 
   return (
-    <LanguageContext.Provider value={{ language, setLanguage, t, updateLanguageInDB }}>
+    <LanguageContext.Provider value={{ language, setLanguage, t, updateLanguageInDB, reloadTranslations }}>
       {children}
     </LanguageContext.Provider>
   );
