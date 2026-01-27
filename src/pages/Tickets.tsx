@@ -1,367 +1,348 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
-import {
-  Ticket, Plus, Search, Loader2, Clock, CheckCircle,
-  AlertCircle, ChevronDown, MessageSquare,
+import { 
+  MessageSquare, Plus, Search, Filter, 
+  Clock, Loader2, X, CheckCircle, AlertCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
-import type { SupportTicket, Unit } from '../types/database';
-import { TICKET_CATEGORIES } from '../lib/constants';
+
+interface Ticket {
+  id: string;
+  title: string;
+  description: string;
+  status: 'open' | 'in_progress' | 'resolved' | 'closed';
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  category: string;
+  created_at: string;
+  updated_at: string;
+  unit_number?: string;
+  created_by_name?: string;
+}
 
 export default function Tickets() {
-  const { currentSite, currentRole, user } = useAuth();
+  const { user, currentSite, role } = useAuth();
+  const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tickets, setTickets] = useState<SupportTicket[]>([]);
-  const [units, setUnits] = useState<Unit[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
-  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  
+  // Form State
+  const [formData, setFormData] = useState({
+    title: '',
+    description: '',
+    priority: 'medium',
+    category: 'maintenance',
+  });
 
-  const isAdmin = currentRole?.role === 'admin';
+  // Check if user is staff (can manage tickets)
+  const canManage = ['admin', 'manager', 'board_member', 'staff'].includes(role || '');
 
   useEffect(() => {
-    if (currentSite) {
-      fetchData();
+    if (currentSite) fetchTickets();
+  }, [currentSite, user]);
+
+  const fetchTickets = async () => {
+    try {
+      setLoading(true);
+      let query = supabase
+        .from('tickets')
+        .select(`
+          *,
+          profiles:created_by (full_name),
+          units:unit_id (unit_number)
+        `)
+        .eq('site_id', currentSite?.id)
+        .order('created_at', { ascending: false });
+
+      // If resident, only see own tickets
+      if (!canManage) {
+        query = query.eq('created_by', user?.id);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      setTickets(data.map(t => ({
+        ...t,
+        created_by_name: t.profiles?.full_name,
+        unit_number: t.units?.unit_number
+      })));
+    } catch (error) {
+      console.error('Error fetching tickets:', error);
+    } finally {
+      setLoading(false);
     }
-  }, [currentSite]);
+  };
 
-  const fetchData = async () => {
-    if (!currentSite) return;
-    setLoading(true);
+  const handleStatusChange = async (ticketId: string, newStatus: string) => {
+    // 1. Optimistic Update (Update UI immediately)
+    const originalTickets = [...tickets];
+    setTickets(tickets.map(t => 
+      t.id === ticketId ? { ...t, status: newStatus as any } : t
+    ));
 
-    const [ticketsRes, unitsRes] = await Promise.all([
-      supabase
-        .from('support_tickets')
-        .select('*')
+    try {
+      // 2. Update Database
+      const { error } = await supabase
+        .from('tickets')
+        .update({ status: newStatus })
+        .eq('id', ticketId);
+
+      if (error) throw error;
+      
+    } catch (error) {
+      console.error('Failed to update status:', error);
+      alert('Failed to update status');
+      setTickets(originalTickets); // Revert if failed
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentSite || !user) return;
+
+    setSubmitting(true);
+    try {
+      // Get user's unit (optional)
+      const { data: userRole } = await supabase
+        .from('user_site_roles')
+        .select('units(id)')
+        .eq('user_id', user.id)
         .eq('site_id', currentSite.id)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('units')
-        .select('*')
-        .eq('site_id', currentSite.id),
-    ]);
+        .maybeSingle();
 
-    setTickets(ticketsRes.data || []);
-    setUnits(unitsRes.data || []);
-    setLoading(false);
+      const unitId = userRole?.units?.[0]?.id;
+
+      const { error } = await supabase.from('tickets').insert({
+        site_id: currentSite.id,
+        created_by: user.id,
+        unit_id: unitId,
+        title: formData.title,
+        description: formData.description,
+        priority: formData.priority,
+        category: formData.category,
+      });
+
+      if (error) throw error;
+
+      setShowModal(false);
+      setFormData({ title: '', description: '', priority: 'medium', category: 'maintenance' });
+      fetchTickets();
+    } catch (error) {
+      console.error('Error creating ticket:', error);
+      alert('Failed to create ticket');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const filteredTickets = tickets.filter(ticket => {
-    const matchesSearch =
-      ticket.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ticket.description?.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = !statusFilter || ticket.status === statusFilter;
+    const matchesSearch = ticket.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         ticket.description.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus = statusFilter === 'all' || ticket.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'open':
-        return <AlertCircle className="w-4 h-4 text-blue-500" />;
-      case 'in_progress':
-        return <Clock className="w-4 h-4 text-yellow-500" />;
-      case 'resolved':
-      case 'closed':
-        return <CheckCircle className="w-4 h-4 text-green-500" />;
-      default:
-        return <AlertCircle className="w-4 h-4 text-gray-500" />;
-    }
-  };
-
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'open':
-        return 'bg-blue-100 text-blue-800';
-      case 'in_progress':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'resolved':
-        return 'bg-green-100 text-green-800';
-      case 'closed':
-        return 'bg-gray-100 text-gray-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
+      case 'open': return 'bg-blue-100 text-blue-800 border-blue-200';
+      case 'in_progress': return 'bg-yellow-100 text-yellow-800 border-yellow-200';
+      case 'resolved': return 'bg-green-100 text-green-800 border-green-200';
+      case 'closed': return 'bg-gray-100 text-gray-800 border-gray-200';
+      default: return 'bg-gray-100 text-gray-800';
     }
   };
-
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'urgent':
-        return 'bg-red-100 text-red-800';
-      case 'high':
-        return 'bg-orange-100 text-orange-800';
-      case 'medium':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'low':
-        return 'bg-gray-100 text-gray-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="p-6 flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-[#002561]" />
-      </div>
-    );
-  }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Support Tickets</h1>
-          <p className="text-gray-600">{tickets.length} tickets</p>
-        </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380]"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          New Ticket
-        </button>
-      </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {['open', 'in_progress', 'resolved', 'closed'].map((status) => {
-          const count = tickets.filter(t => t.status === status).length;
-          return (
-            <div
-              key={status}
-              className="bg-white rounded-xl shadow-sm border border-gray-100 p-4"
-            >
-              <div className="flex items-center space-x-2 mb-1">
-                {getStatusIcon(status)}
-                <span className="text-sm text-gray-500 capitalize">{status.replace('_', ' ')}</span>
-              </div>
-              <p className="text-2xl font-bold text-gray-900">{count}</p>
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-8">
+          <div className="flex items-center space-x-3 mb-4 sm:mb-0">
+            <MessageSquare className="w-8 h-8 text-[#002561]" />
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Support Tickets</h1>
+              <p className="text-gray-600">
+                {canManage ? 'Manage resident requests' : 'Submit and track your requests'}
+              </p>
             </div>
-          );
-        })}
-      </div>
+          </div>
+          <button 
+            onClick={() => setShowModal(true)}
+            className="flex items-center justify-center space-x-2 bg-[#002561] text-white px-4 py-2 rounded-lg hover:bg-[#003875] transition-colors"
+          >
+            <Plus className="w-5 h-5" />
+            <span>New Ticket</span>
+          </button>
+        </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row gap-4">
+        {/* Filters */}
+        <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
               type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search tickets..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
+              className="w-full pl-9 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <div className="relative">
-            <select
+          <div className="flex items-center space-x-2">
+            <Filter className="w-4 h-4 text-gray-400" />
+            <select 
+              className="border rounded-lg px-3 py-2 focus:ring-2 focus:ring-[#002561]"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] appearance-none bg-white pr-10"
             >
-              <option value="">All Status</option>
+              <option value="all">All Status</option>
               <option value="open">Open</option>
               <option value="in_progress">In Progress</option>
               <option value="resolved">Resolved</option>
               <option value="closed">Closed</option>
             </select>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
           </div>
         </div>
 
-        {filteredTickets.length === 0 ? (
-          <div className="p-12 text-center">
-            <Ticket className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500">No tickets found</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-gray-100">
-            {filteredTickets.map((ticket) => (
-              <div key={ticket.id} className="p-4 hover:bg-gray-50">
-                <div className="flex items-start justify-between">
+        {/* Ticket List */}
+        <div className="space-y-4">
+          {loading ? (
+             <div className="text-center py-12"><Loader2 className="w-8 h-8 animate-spin mx-auto text-[#002561]" /></div>
+          ) : filteredTickets.length === 0 ? (
+             <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
+               <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+               <p className="text-gray-500">No tickets found</p>
+             </div>
+          ) : (
+            filteredTickets.map(ticket => (
+              <div key={ticket.id} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="flex-1">
-                    <div className="flex items-center space-x-3">
-                      <h3 className="font-medium text-gray-900">{ticket.title}</h3>
-                      <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusColor(ticket.status)}`}>
-                        {ticket.status.replace('_', ' ')}
-                      </span>
-                      <span className={`px-2 py-0.5 text-xs rounded-full ${getPriorityColor(ticket.priority)}`}>
+                    <div className="flex items-center gap-3 mb-2">
+                      
+                      {/* STATUS CHANGER (Admins Only) */}
+                      {canManage ? (
+                        <select
+                          value={ticket.status}
+                          onChange={(e) => handleStatusChange(ticket.id, e.target.value)}
+                          className={`text-xs font-bold uppercase rounded-full px-3 py-1 border-2 cursor-pointer focus:ring-2 focus:ring-[#002561] focus:outline-none transition-colors ${getStatusColor(ticket.status)}`}
+                        >
+                          <option value="open">Open</option>
+                          <option value="in_progress">In Progress</option>
+                          <option value="resolved">Resolved</option>
+                          <option value="closed">Closed</option>
+                        </select>
+                      ) : (
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium capitalize ${getStatusColor(ticket.status)}`}>
+                          {ticket.status.replace('_', ' ')}
+                        </span>
+                      )}
+
+                      <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium capitalize 
+                        ${ticket.priority === 'high' || ticket.priority === 'critical' ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-600'}`}>
                         {ticket.priority}
                       </span>
+                      <span className="text-xs text-gray-500 flex items-center">
+                        <Clock className="w-3 h-3 mr-1" />
+                        {format(new Date(ticket.created_at), 'MMM d, yyyy')}
+                      </span>
                     </div>
-                    {ticket.description && (
-                      <p className="text-sm text-gray-500 mt-1 line-clamp-2">
-                        {ticket.description}
-                      </p>
-                    )}
-                    <div className="flex items-center space-x-4 mt-2 text-xs text-gray-400">
-                      <span className="capitalize">{ticket.category}</span>
-                      <span>{format(new Date(ticket.created_at), 'MMM d, yyyy')}</span>
+                    
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">{ticket.title}</h3>
+                    <p className="text-gray-600 text-sm mb-3 line-clamp-2">{ticket.description}</p>
+                    
+                    <div className="flex items-center text-xs text-gray-500 gap-4">
+                       {ticket.unit_number && <span className="font-medium text-gray-900">Unit: {ticket.unit_number}</span>}
+                       {ticket.created_by_name && <span>By: {ticket.created_by_name}</span>}
                     </div>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
+
       </div>
 
-      {showCreateModal && (
-        <CreateTicketModal
-          siteId={currentSite!.id}
-          units={units}
-          userId={user!.id}
-          onClose={() => setShowCreateModal(false)}
-          onCreated={() => {
-            setShowCreateModal(false);
-            fetchData();
-          }}
-        />
+      {/* New Ticket Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-xl font-bold">Create New Ticket</h2>
+              <button onClick={() => setShowModal(false)}><X className="w-5 h-5 text-gray-400" /></button>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Title</label>
+                <input 
+                  required
+                  type="text" 
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
+                  placeholder="e.g., Leaking pipe in kitchen"
+                  value={formData.title}
+                  onChange={e => setFormData({...formData, title: e.target.value})}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Description</label>
+                <textarea 
+                  required
+                  rows={3}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
+                  placeholder="Describe the issue in detail..."
+                  value={formData.description}
+                  onChange={e => setFormData({...formData, description: e.target.value})}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Category</label>
+                  <select 
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
+                    value={formData.category}
+                    onChange={e => setFormData({...formData, category: e.target.value})}
+                  >
+                    <option value="maintenance">Maintenance</option>
+                    <option value="security">Security</option>
+                    <option value="cleaning">Cleaning</option>
+                    <option value="administrative">Administrative</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Priority</label>
+                  <select 
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-[#002561]"
+                    value={formData.priority}
+                    onChange={e => setFormData({...formData, priority: e.target.value as any})}
+                  >
+                    <option value="low">Low</option>
+                    <option value="medium">Medium</option>
+                    <option value="high">High</option>
+                    <option value="critical">Critical</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-4 flex space-x-3">
+                <button type="button" onClick={() => setShowModal(false)} className="flex-1 px-4 py-2 border rounded-lg hover:bg-gray-50">Cancel</button>
+                <button type="submit" disabled={submitting} className="flex-1 px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003875] flex justify-center items-center">
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin"/> : 'Create Ticket'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
-    </div>
-  );
-}
 
-interface CreateTicketModalProps {
-  siteId: string;
-  units: Unit[];
-  userId: string;
-  onClose: () => void;
-  onCreated: () => void;
-}
-
-function CreateTicketModal({ siteId, units, userId, onClose, onCreated }: CreateTicketModalProps) {
-  const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({
-    title: '',
-    description: '',
-    category: 'other',
-    priority: 'medium',
-    unit_id: '',
-  });
-
-  const handleCreate = async () => {
-    if (!formData.title) return;
-    setLoading(true);
-
-    await supabase.from('support_tickets').insert({
-      site_id: siteId,
-      unit_id: formData.unit_id || null,
-      title: formData.title,
-      description: formData.description || null,
-      category: formData.category,
-      priority: formData.priority,
-      created_by: userId,
-    });
-
-    setLoading(false);
-    onCreated();
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full">
-        <div className="p-6 border-b border-gray-100">
-          <h3 className="text-xl font-semibold text-gray-900">Create Support Ticket</h3>
-        </div>
-
-        <div className="p-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Title *
-            </label>
-            <input
-              type="text"
-              value={formData.title}
-              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
-              placeholder="Brief description of the issue"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Category
-              </label>
-              <select
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
-              >
-                {TICKET_CATEGORIES.map((cat) => (
-                  <option key={cat.value} value={cat.value}>
-                    {cat.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Priority
-              </label>
-              <select
-                value={formData.priority}
-                onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
-              >
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="urgent">Urgent</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Related Unit
-            </label>
-            <select
-              value={formData.unit_id}
-              onChange={(e) => setFormData({ ...formData, unit_id: e.target.value })}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
-            >
-              <option value="">General / Common Area</option>
-              {units.map((unit) => (
-                <option key={unit.id} value={unit.id}>
-                  {unit.block ? `${unit.block}-` : ''}{unit.unit_number}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Description
-            </label>
-            <textarea
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              rows={4}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]"
-              placeholder="Detailed description of the issue..."
-            />
-          </div>
-        </div>
-
-        <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-600 hover:text-gray-900"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={loading || !formData.title}
-            className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] disabled:opacity-50"
-          >
-            {loading && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-            Create Ticket
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
