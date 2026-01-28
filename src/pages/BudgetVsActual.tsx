@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { usePermissions } from '../contexts/PermissionsContext'; // ✅ KEEPS PERMISSIONS
+import { usePermissions } from '../contexts/PermissionsContext';
 import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar, Wallet } from 'lucide-react';
 import { format } from 'date-fns';
@@ -17,8 +17,6 @@ interface ReportLine {
 
 export default function BudgetVsActual() {
   const { currentSite, currentRole } = useAuth();
-  
-  // ✅ SECURITY: Keeps the permission check we fixed earlier
   const { canAccess } = usePermissions(); 
 
   const [loading, setLoading] = useState(true);
@@ -33,7 +31,6 @@ export default function BudgetVsActual() {
   // New state for Cash Position
   const [openingBalance, setOpeningBalance] = useState(0);
 
-  // ✅ SECURITY: This line prevents the "White Screen" or "Access Denied" errors
   const canView = currentRole?.role === 'admin' || (canAccess && canAccess('/budget-vs-actual'));
 
   useEffect(() => {
@@ -90,7 +87,7 @@ export default function BudgetVsActual() {
         .eq('fiscal_period_id', selectedPeriodId),
       supabase
         .from('accounts')
-        .select('initial_balance')
+        .select('initial_balance, currency_code, initial_exchange_rate') // ✅ Fetch rates
         .eq('site_id', currentSite?.id)
         .eq('is_active', true)
     ]);
@@ -98,8 +95,11 @@ export default function BudgetVsActual() {
     setBudgetCategories(categoriesRes.data || []);
     setLedgerEntries(entriesRes.data || []);
 
-    // Calculate Global Opening Balance (Sum of all account initial balances)
-    const totalOpening = (accountsRes.data || []).reduce((sum, acc) => sum + Number(acc.initial_balance), 0);
+    // ✅ FIX: Calculate Global Opening Balance using Exchange Rates
+    const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
+        const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
+        return sum + (Number(acc.initial_balance) * rate);
+    }, 0);
     setOpeningBalance(totalOpening);
 
     calculateReportLines(categoriesRes.data || [], entriesRes.data || []);
@@ -107,10 +107,12 @@ export default function BudgetVsActual() {
   };
 
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
-    const incomeEntries = entries.filter(e => e.entry_type === 'income');
-    const expenseEntries = entries.filter(e => e.entry_type === 'expense');
+    // ✅ FIX: Filter out 'Transfer' type to avoid double counting internal movements in P&L
+    const incomeEntries = entries.filter(e => e.entry_type === 'income' && e.category !== 'Transfer');
+    const expenseEntries = entries.filter(e => e.entry_type === 'expense' && e.category !== 'Transfer');
 
     const incomeData: ReportLine[] = INCOME_CATEGORIES.map((cat) => {
+      // ✅ FIX: Use 'amount_reporting_try' to sum up TL equivalent values
       const actual = incomeEntries
         .filter(e => e.category === cat)
         .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -130,6 +132,7 @@ export default function BudgetVsActual() {
     });
 
     const expenseData: ReportLine[] = EXPENSE_CATEGORIES.map((cat) => {
+      // ✅ FIX: Use 'amount_reporting_try' here too
       const actual = expenseEntries
         .filter(e => e.category === cat)
         .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -182,7 +185,6 @@ export default function BudgetVsActual() {
     window.print();
   };
 
-  // ✅ ACCESS RESTRICTED VIEW (Matches your Permissions logic)
   if (!canView) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -274,7 +276,6 @@ export default function BudgetVsActual() {
             )}
           </div>
 
-          {/* ✅ NEW: Cash Position Summary Card */}
           <div className="bg-[#002561] text-white rounded-xl p-6 shadow-sm">
             <div className="flex items-center gap-2 mb-4">
               <Wallet className="w-6 h-6 text-white/80" />
@@ -284,14 +285,14 @@ export default function BudgetVsActual() {
               <div>
                 <p className="text-sm text-white/70 mb-1">Opening Cash Balance</p>
                 <p className="text-2xl font-bold">{formatCurrency(openingBalance)}</p>
-                <p className="text-xs text-white/50">Initial Accounts State</p>
+                <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
               </div>
               <div>
                 <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
-                <p className="text-xs text-white/50">Income - Expenses</p>
+                <p className="text-xs text-white/50">Income - Expenses (Converted to TRY)</p>
               </div>
               <div className="pt-4 md:pt-0 md:border-l md:border-white/20 md:pl-8">
                 <p className="text-sm text-white/70 mb-1">Estimated Closing Balance</p>
