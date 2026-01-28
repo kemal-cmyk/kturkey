@@ -2,15 +2,15 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { supabase } from '../lib/supabase';
-import { Loader2, Download, TrendingUp, TrendingDown, Calendar, Wallet } from 'lucide-react';
+import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar, Wallet } from 'lucide-react';
 import { format } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 
 interface ReportLine {
   category: string;
-  accrued: number;
-  actual: number;
-  variance: number;
+  accrued: number; // Budget / Planned
+  actual: number;  // Realized
+  variance: number; // Difference
   percentage: number;
 }
 
@@ -25,6 +25,7 @@ export default function BudgetVsActual() {
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
   const [openingBalance, setOpeningBalance] = useState(0);
 
+  // Helper function for permissions
   const canView = currentRole?.role === 'admin' || (canAccess && canAccess('/budget-vs-actual'));
 
   useEffect(() => {
@@ -84,6 +85,7 @@ export default function BudgetVsActual() {
         .eq('is_active', true)
     ]);
 
+    // Calculate Opening Balance with FX Rates
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
       const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
       return sum + (Number(acc.initial_balance) * rate);
@@ -95,8 +97,10 @@ export default function BudgetVsActual() {
   };
 
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
+    // 1. Define Strict Income Keywords
     const INCOME_KEYWORDS = ['maintenance', 'dues', 'aidat', 'extra fee', 'income', 'revenue', 'interest'];
 
+    // 2. Get unique categories
     const allCategories = new Set<string>();
     categories.forEach(c => allCategories.add(c.category_name));
     entries.forEach(e => {
@@ -108,8 +112,11 @@ export default function BudgetVsActual() {
 
     allCategories.forEach(catName => {
       const catNameLower = catName.toLowerCase();
+      
+      // 3. DECIDE LANE based on Name
       const isIncomeCategory = INCOME_KEYWORDS.some(k => catNameLower.includes(k));
 
+      // 4. Calculate Raw Totals (Converted to TRY)
       const incomeSum = entries
         .filter(e => e.category === catName && e.entry_type === 'income')
         .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -119,35 +126,40 @@ export default function BudgetVsActual() {
         .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
       const budgetItem = categories.find(c => c.category_name === catName);
-      const accruedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
+      const budgetAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
 
       if (isIncomeCategory) {
-        const actualIncome = incomeSum - expenseSum;
+        // === INCOME LANE ===
+        // Net Actual = (Money In) - (Money Out/Refunds)
+        const netActual = incomeSum - expenseSum;
 
-        if (accruedAmount > 0 || Math.abs(actualIncome) > 0) {
+        if (budgetAmount > 0 || Math.abs(netActual) > 0) {
           incomeLinesTemp.push({
             category: catName,
-            accrued: accruedAmount,
-            actual: actualIncome,
-            variance: actualIncome - accruedAmount,
-            percentage: accruedAmount > 0 ? (actualIncome / accruedAmount) * 100 : 0
+            accrued: budgetAmount, // This is your Target Income
+            actual: netActual,     // This is what you collected
+            variance: netActual - budgetAmount, // Positive = Surplus
+            percentage: budgetAmount > 0 ? (netActual / budgetAmount) * 100 : 0
           });
         }
       } else {
-        const actualExpense = expenseSum - incomeSum;
+        // === EXPENSE LANE ===
+        // Net Actual = (Money Out) - (Money In/Rebates)
+        const netActual = expenseSum - incomeSum;
 
-        if (accruedAmount > 0 || Math.abs(actualExpense) > 0) {
+        if (budgetAmount > 0 || Math.abs(netActual) > 0) {
           expenseLinesTemp.push({
             category: catName,
-            accrued: accruedAmount,
-            actual: actualExpense,
-            variance: accruedAmount - actualExpense,
-            percentage: accruedAmount > 0 ? (actualExpense / accruedAmount) * 100 : 0
+            accrued: budgetAmount, // This is your Spending Limit
+            actual: netActual,     // This is what you spent
+            variance: budgetAmount - netActual, // Positive = Under Budget (Good)
+            percentage: budgetAmount > 0 ? (netActual / budgetAmount) * 100 : 0
           });
         }
       }
     });
 
+    // Sort by largest budget
     incomeLinesTemp.sort((a, b) => b.accrued - a.accrued);
     expenseLinesTemp.sort((a, b) => b.accrued - a.accrued);
 
@@ -164,6 +176,7 @@ export default function BudgetVsActual() {
     }).format(amount);
   };
 
+  // Totals Calculation
   const totalIncomeAccrued = incomeLines.reduce((sum, line) => sum + line.accrued, 0);
   const totalIncomeActual = incomeLines.reduce((sum, line) => sum + line.actual, 0);
   const totalIncomeVariance = totalIncomeActual - totalIncomeAccrued;
@@ -294,11 +307,11 @@ export default function BudgetVsActual() {
               <h4 className="text-sm font-medium text-orange-900 mb-2">Total Expenses</h4>
               <div className="space-y-1">
                 <div className="flex justify-between text-sm">
-                  <span className="text-orange-700">Accrued (Budget):</span>
+                  <span className="text-orange-700">Budget:</span>
                   <span className="font-semibold text-orange-900">{formatCurrency(totalExpenseAccrued)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-orange-700">Actual Spent:</span>
+                  <span className="text-orange-700">Actual:</span>
                   <span className="font-semibold text-orange-900">{formatCurrency(totalExpenseActual)}</span>
                 </div>
                 <div className="flex justify-between text-sm pt-1 border-t border-orange-300">
@@ -342,8 +355,8 @@ export default function BudgetVsActual() {
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Accrued Income</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Income</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Accrued (Budget)</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Collected</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
@@ -390,14 +403,14 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingDown className="w-5 h-5" />
-                Expense Analysis: Accrued (Budget) vs Actual Spent
+                Expense Analysis: Budget vs Actual Spent
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Accrued (Budget)</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget Limit</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Spent</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
