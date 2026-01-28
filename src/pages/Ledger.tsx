@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -7,7 +7,7 @@ import {
   Receipt, Search, Filter, Download, Loader2,
   TrendingUp, TrendingDown, ChevronDown, Calendar,
   Building2, Wallet, Save, X, Trash2, Plus, Edit2, Check, Upload,
-  ArrowRightLeft
+  ArrowRightLeft, RefreshCw
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { LedgerEntry, FiscalPeriod, BudgetCategory } from '../types/database';
@@ -57,6 +57,7 @@ export default function Ledger() {
     to_account_id: '',
   });
 
+  const [isFetchingRate, setIsFetchingRate] = useState(false);
   const [unitDuesCurrency, setUnitDuesCurrency] = useState<string | null>(null);
 
   const getTransferDetails = () => {
@@ -87,6 +88,49 @@ export default function Ledger() {
       fetchCategories(selectedPeriod);
     }
   }, [selectedPeriod]);
+
+  // ✅ AUTO-FETCH RATE WHEN DATE OR CURRENCY CHANGES (ADD MODE)
+  useEffect(() => {
+    const fetchRate = async () => {
+      // Only fetch if not TRY and we have a date
+      if (newEntry.currency_code === 'TRY' || !newEntry.entry_date) {
+        if (newEntry.currency_code === 'TRY' && newEntry.exchange_rate !== '1') {
+             setNewEntry(prev => ({ ...prev, exchange_rate: '1' }));
+        }
+        return;
+      }
+
+      setIsFetchingRate(true);
+      try {
+        const { data, error } = await supabase.functions.invoke('get-tcmb-rate', {
+          body: { date: newEntry.entry_date }
+        });
+
+        if (!error && data) {
+          let rate = 1;
+          if (newEntry.currency_code === 'EUR') rate = data.EUR;
+          else if (newEntry.currency_code === 'USD') rate = data.USD;
+          else if (newEntry.currency_code === 'GBP') rate = data.GBP; // Assuming API returns this
+          
+          // Only update if we got a valid rate
+          if (rate && rate > 0) {
+             setNewEntry(prev => ({ ...prev, exchange_rate: rate.toString() }));
+          }
+        }
+      } catch (err) {
+        console.error("Failed to auto-fetch rate:", err);
+      } finally {
+        setIsFetchingRate(false);
+      }
+    };
+
+    const timer = setTimeout(() => {
+        fetchRate();
+    }, 500); // Debounce slightly
+
+    return () => clearTimeout(timer);
+  }, [newEntry.currency_code, newEntry.entry_date]);
+
 
   const fetchData = async () => {
     if (!currentSite) return;
@@ -338,18 +382,15 @@ export default function Ledger() {
     await fetchData(); 
   };
 
-  // ✅ UPDATED: Syncs updates to Payments table if entry is linked
   const handleUpdateEntry = async (entry: LedgerEntry, updates: Partial<LedgerEntry>) => {
     const cleanedUpdates = {
       ...updates,
       account_id: updates.account_id || null,
-      // Recalculate reporting amount if rate/amount changed
       amount_reporting_try: (updates.currency_code === 'TRY' || updates.currency_code === undefined && entry.currency_code === 'TRY') 
         ? Number(updates.amount) 
         : Number(updates.amount) * (Number(updates.exchange_rate) || 1)
     };
 
-    // 1. Update Ledger Entry
     const { error } = await supabase
       .from('ledger_entries')
       .update(cleanedUpdates)
@@ -361,14 +402,11 @@ export default function Ledger() {
         return;
     }
 
-    // 2. If linked to a Payment, update Payment too (Important for Units.tsx!)
     if (entry.payment_id) {
-        // We assume 'payments' table has exchange_rate column as per migration
         const paymentUpdates: any = {
             amount: cleanedUpdates.amount,
             payment_date: cleanedUpdates.entry_date,
             currency_code: cleanedUpdates.currency_code,
-            // Assuming the column exists from migration
             exchange_rate: cleanedUpdates.exchange_rate 
         };
         
@@ -393,7 +431,6 @@ export default function Ledger() {
     await fetchData();
   };
 
-  // ... (Account management functions same as before) ...
   const handleSaveAccount = async (accountData: Partial<Account>) => {
     if (!currentSite) return;
     if (editingAccount) {
@@ -646,7 +683,17 @@ export default function Ledger() {
                             </select>
                             {selectedAccount && <span className="text-xs text-gray-500">(Account: {accountCurrency})</span>}
                             {needsExchangeRate && (
-                              <><label className={`text-sm font-medium ml-2 ${hasCurrencyMismatch ? 'text-orange-600' : 'text-gray-600'}`}>Rate {hasCurrencyMismatch ? '(Required)' : ''}:</label><input type="number" step="0.0001" value={newEntry.exchange_rate} onChange={(e) => setNewEntry({ ...newEntry, exchange_rate: e.target.value })} placeholder="Exchange rate" className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${hasCurrencyMismatch ? 'border-orange-400 bg-orange-50 focus:ring-orange-500' : 'border-amber-400 bg-amber-50 focus:ring-amber-500'}`} /></>
+                              <>
+                                <label className={`text-sm font-medium ml-2 ${hasCurrencyMismatch ? 'text-orange-600' : 'text-gray-600'}`}>Rate {hasCurrencyMismatch ? '(Required)' : ''}:</label>
+                                <div className="relative">
+                                  <input type="number" step="0.0001" value={newEntry.exchange_rate} onChange={(e) => setNewEntry({ ...newEntry, exchange_rate: e.target.value })} placeholder="Exchange rate" className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${hasCurrencyMismatch ? 'border-orange-400 bg-orange-50 focus:ring-orange-500' : 'border-amber-400 bg-amber-50 focus:ring-amber-500'}`} />
+                                  {isFetchingRate && (
+                                    <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                                      <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
+                                    </div>
+                                  )}
+                                </div>
+                              </>
                             )}
                           </div>
                         )}
@@ -801,6 +848,51 @@ function EntryRow({
     unit_id: '',
   });
 
+  // ✅ Auto-Fetch Rate for Edit Mode too
+  const [isFetchingRate, setIsFetchingRate] = useState(false);
+
+  useEffect(() => {
+    if (!isEditing) return; // Only fetch if we are editing
+
+    const fetchRate = async () => {
+      if (editData.currency_code === 'TRY' || !editData.entry_date) {
+         if (editData.currency_code === 'TRY' && editData.exchange_rate !== 1) {
+             setEditData(prev => ({ ...prev, exchange_rate: 1 }));
+         }
+         return;
+      }
+
+      setIsFetchingRate(true);
+      try {
+        const { data, error } = await supabase.functions.invoke('get-tcmb-rate', {
+          body: { date: editData.entry_date }
+        });
+
+        if (!error && data) {
+          let rate = 1;
+          if (editData.currency_code === 'EUR') rate = data.EUR;
+          else if (editData.currency_code === 'USD') rate = data.USD;
+          else if (editData.currency_code === 'GBP') rate = data.GBP;
+          
+          if (rate && rate > 0) {
+             setEditData(prev => ({ ...prev, exchange_rate: rate }));
+          }
+        }
+      } catch (err) {
+        console.error("Failed to auto-fetch rate (Edit Mode):", err);
+      } finally {
+        setIsFetchingRate(false);
+      }
+    };
+
+    const timer = setTimeout(() => {
+        fetchRate();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [editData.currency_code, editData.entry_date, isEditing]);
+
+
   const account = accounts.find(a => a.id === entry.account_id);
   const isMaintenanceRelated = editData.category === 'Maintenance Fees' || editData.category === 'Extra Fees';
 
@@ -829,7 +921,14 @@ function EntryRow({
                     {SUPPORTED_CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
                 </select>
                 {editData.currency_code !== 'TRY' && (
-                    <input type="number" step="0.0001" value={editData.exchange_rate} onChange={(e) => setEditData({ ...editData, exchange_rate: Number(e.target.value) })} className="w-16 px-1 py-1.5 text-xs border border-orange-300 rounded bg-orange-50 text-right" placeholder="Rate"/>
+                    <div className="relative">
+                        <input type="number" step="0.0001" value={editData.exchange_rate} onChange={(e) => setEditData({ ...editData, exchange_rate: Number(e.target.value) })} className="w-16 px-1 py-1.5 text-xs border border-orange-300 rounded bg-orange-50 text-right" placeholder="Rate"/>
+                        {isFetchingRate && (
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2">
+                                <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
+                            </div>
+                        )}
+                    </div>
                 )}
              </div>
           </td>
