@@ -21,6 +21,8 @@ export default function BudgetVsActual() {
   const [loading, setLoading] = useState(true);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('');
+  const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -84,6 +86,9 @@ export default function BudgetVsActual() {
         .eq('is_active', true)
     ]);
 
+    setBudgetCategories(categoriesRes.data || []);
+    setLedgerEntries(entriesRes.data || []);
+
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
         const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
         return sum + (Number(acc.initial_balance) * rate);
@@ -94,83 +99,81 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FIXED LOGIC: Ledger Behavior First, Smart Naming Second
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
-    
-    // 1. Collect ALL unique categories
-    const allCategories = new Set<string>();
-    categories.forEach(c => allCategories.add(c.category_name));
+    // 1. Gather ALL Category Names (Budget + Ledger)
+    const allNames = new Set<string>();
+    categories.forEach(c => allNames.add(c.category_name));
     entries.forEach(e => {
-        if (e.category !== 'Transfer') allCategories.add(e.category);
+        if (e.category !== 'Transfer') allNames.add(e.category);
     });
 
     const incomeLinesTemp: ReportLine[] = [];
     const expenseLinesTemp: ReportLine[] = [];
+    const processedNames = new Set<string>();
 
-    // Helper: Normalize string for comparison
-    const normalize = (str: string) => str.trim().toLowerCase();
+    // 2. Iterate through every category found
+    Array.from(allNames).forEach(name => {
+        const normalize = (s: string) => s.trim().toLowerCase();
+        const lowerName = normalize(name);
 
-    // Helper: Get budget item regardless of case
-    const getBudget = (name: string) => categories.find(c => normalize(c.category_name) === normalize(name));
+        if (processedNames.has(lowerName)) return;
+        processedNames.add(lowerName);
 
-    // Iterate through every category found in the system
-    Array.from(allCategoryNames).forEach(catName => {
-        const catLower = normalize(catName);
-        
-        // Prevent duplicates
-        const exists = [...incomeLinesTemp, ...expenseLinesTemp].some(l => normalize(l.category) === catLower);
-        if (exists) return;
+        // --- STEP A: IDENTIFY TYPE (INCOME vs EXPENSE) ---
+        let isIncome = false;
 
-        // --- STEP 1: CALCULATE ACTUALS FROM LEDGER ---
-        const relevantEntries = entries.filter(e => normalize(e.category) === catLower && e.category !== 'Transfer');
-        
-        const totalIncomeEntries = relevantEntries
-            .filter(e => e.entry_type === 'income')
-            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-        const totalExpenseEntries = relevantEntries
-            .filter(e => e.entry_type === 'expense')
-            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-        // --- STEP 2: DECIDE LANE (INCOME OR EXPENSE?) ---
-        let isIncomeCategory = false;
-
-        if (totalIncomeEntries > 0 || totalExpenseEntries > 0) {
-            // RULE A: "Behavior" - If we collected more than we spent, it's Income.
-            if (totalIncomeEntries >= totalExpenseEntries) {
-                isIncomeCategory = true; 
+        // Condition 1: Explicit Income Keywords
+        if (
+            lowerName.includes('dues') || 
+            lowerName.includes('aidat') ||
+            lowerName.includes('income') || // Catches "Other Income", "Interest Income"
+            lowerName.includes('revenue') ||
+            lowerName.includes('extra fee')
+        ) {
+            isIncome = true;
+        }
+        // Condition 2: "Maintenance" is tricky. 
+        // "Maintenance Fee" = Income. "Pool Maintenance" = Expense.
+        else if (lowerName.includes('maintenance')) {
+            if (lowerName.includes('fee')) {
+                isIncome = true;
             } else {
-                isIncomeCategory = false;
-            }
-        } else {
-            // RULE B: "Naming Fallback" (If no ledger data exists yet)
-            // Strict check for Income keywords.
-            // "Maintenance" is NOT enough (could be Pool Maintenance).
-            // "Maintenance Fee" IS enough.
-            if (
-                catLower.includes('income') || 
-                catLower.includes('revenue') || 
-                catName === 'Dues' || 
-                catLower === 'aidat' ||
-                (catLower.includes('maintenance') && catLower.includes('fee')) ||
-                catLower.includes('extra fee')
-            ) {
-                isIncomeCategory = true;
-            } else {
-                // Everything else defaults to Expense (Electric, Water, Internet, Pool Maintenance)
-                isIncomeCategory = false; 
+                isIncome = false; // "Pool Maintenance", "Elevator Maintenance" -> Expense
             }
         }
 
-        // --- STEP 3: PREPARE DATA ---
-        const budgetItem = getBudget(catName);
+        // --- STEP B: FIND BUDGET (Fuzzy Match) ---
+        // We look for a budget item that matches this name, even if slightly different
+        // e.g. Ledger: "Communual Electric Pay" vs Budget: "Communal Electric"
+        const budgetItem = categories.find(c => {
+            const bName = normalize(c.category_name);
+            return bName === lowerName || bName.includes(lowerName) || lowerName.includes(bName);
+        });
         const planned = budgetItem ? Number(budgetItem.planned_amount) : 0;
-        const displayName = budgetItem ? budgetItem.category_name : catName;
+        
+        // Use the Budget Name for display if found (it's usually cleaner), otherwise raw name
+        const displayName = budgetItem ? budgetItem.category_name : name;
 
-        if (isIncomeCategory) {
-            // INCOME LANE: (Collections - Refunds)
-            const actual = totalIncomeEntries - totalExpenseEntries;
+        // --- STEP C: CALCULATE ACTUALS ---
+        // Find all ledger entries that match this name (fuzzy)
+        const relevantEntries = entries.filter(e => {
+            if (e.category === 'Transfer') return false;
+            const eName = normalize(e.category);
+            return eName === lowerName || eName.includes(lowerName) || lowerName.includes(eName);
+        });
+
+        const totalIn = relevantEntries
+            .filter(e => e.entry_type === 'income')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
             
+        const totalOut = relevantEntries
+            .filter(e => e.entry_type === 'expense')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+        // --- STEP D: ASSIGN TO TABLE ---
+        if (isIncome) {
+            // Income Lane: Net Actual = Collected - Refunded
+            const actual = totalIn - totalOut;
             if (planned > 0 || Math.abs(actual) > 0) {
                 incomeLinesTemp.push({
                     category: displayName,
@@ -181,22 +184,21 @@ export default function BudgetVsActual() {
                 });
             }
         } else {
-            // EXPENSE LANE: (Spending - Rebates)
-            const actual = totalExpenseEntries - totalIncomeEntries;
-
+            // Expense Lane: Net Actual = Spent - Rebated
+            const actual = totalOut - totalIn;
             if (planned > 0 || Math.abs(actual) > 0) {
                 expenseLinesTemp.push({
                     category: displayName,
                     planned,
                     actual,
-                    difference: planned - actual,
+                    difference: planned - actual, // Under budget is good (positive)
                     percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         }
     });
 
-    // 4. Sort
+    // Sort: Largest Budget items first
     incomeLinesTemp.sort((a, b) => b.planned - a.planned);
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
@@ -213,7 +215,6 @@ export default function BudgetVsActual() {
     }).format(amount);
   };
 
-  // Totals
   const totalIncomePlanned = incomeLines.reduce((sum, line) => sum + line.planned, 0);
   const totalIncomeActual = incomeLines.reduce((sum, line) => sum + line.actual, 0);
   const totalIncomeDifference = totalIncomeActual - totalIncomePlanned;
@@ -243,20 +244,14 @@ export default function BudgetVsActual() {
           <h1 className="text-2xl font-bold text-gray-900">Budget vs Actual Report</h1>
           <p className="text-gray-600 mt-1">Compare planned budget with actual performance</p>
         </div>
-        <button
-          onClick={handlePrint}
-          className="flex items-center gap-2 px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
-        >
-          <Download className="w-4 h-4" />
-          Print / Export
+        <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors">
+          <Download className="w-4 h-4" /> Print / Export
         </button>
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 print:hidden">
         <div className="p-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Select Fiscal Period
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Select Fiscal Period</label>
           <select
             value={selectedPeriodId}
             onChange={(e) => setSelectedPeriodId(e.target.value)}
@@ -275,11 +270,8 @@ export default function BudgetVsActual() {
       <div className="bg-white rounded-lg border border-gray-200 print:shadow-none print:border-0">
         <div className="p-8 space-y-8">
           <div className="text-center border-b border-gray-200 pb-6">
-            <h2 className="text-3xl font-bold text-[#002561] mb-2">
-              Budget vs Actual Comparison Report
-            </h2>
+            <h2 className="text-3xl font-bold text-[#002561] mb-2">Budget vs Actual Comparison Report</h2>
             <h3 className="text-xl font-semibold text-gray-700 mb-3">{currentSite?.name}</h3>
-            {/* Find active period safely */}
             {fiscalPeriods.find(p => p.id === selectedPeriodId) && (
               <div className="flex items-center justify-center gap-2 text-gray-600">
                 <Calendar className="w-4 h-4" />
@@ -299,7 +291,7 @@ export default function BudgetVsActual() {
               <div>
                 <p className="text-sm text-white/70 mb-1">Opening Cash Balance</p>
                 <p className="text-2xl font-bold">{formatCurrency(openingBalance)}</p>
-                <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
+                <p className="text-xs text-white/50">Initial Accounts State</p>
               </div>
               <div>
                 <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
@@ -331,7 +323,7 @@ export default function BudgetVsActual() {
                   <span className="font-semibold text-blue-900">{formatCurrency(totalIncomeActual)}</span>
                 </div>
                 <div className="flex justify-between text-sm pt-1 border-t border-blue-300">
-                  <span className="text-blue-700">Difference:</span>
+                  <span className="text-blue-700">Variance:</span>
                   <span className={`font-bold ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatCurrency(totalIncomeDifference)}
                   </span>
@@ -384,16 +376,16 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingUp className="w-5 h-5" />
-                Income Analysis: Accrued vs Actual
+                Income Analysis
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Accrued (Budget)</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Collected</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Planned</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Difference</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
                   </thead>
@@ -412,11 +404,7 @@ export default function BudgetVsActual() {
                       </tr>
                     ))}
                     {incomeLines.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-gray-500">
-                          No income data available for this period
-                        </td>
-                      </tr>
+                      <tr><td colSpan={5} className="py-8 text-center text-gray-500">No income data available</td></tr>
                     )}
                   </tbody>
                   <tfoot>
@@ -424,12 +412,8 @@ export default function BudgetVsActual() {
                       <td className="py-3 px-4 text-gray-900">Total Income</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalIncomePlanned)}</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalIncomeActual)}</td>
-                      <td className={`py-3 px-4 text-right ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(totalIncomeDifference)}
-                      </td>
-                      <td className="py-3 px-4 text-right text-gray-900">
-                        {totalIncomePlanned > 0 ? `${((totalIncomeActual / totalIncomePlanned) * 100).toFixed(1)}%` : '-'}
-                      </td>
+                      <td className={`py-3 px-4 text-right ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalIncomeDifference)}</td>
+                      <td className="py-3 px-4 text-right text-gray-900">{totalIncomePlanned > 0 ? `${((totalIncomeActual / totalIncomePlanned) * 100).toFixed(1)}%` : '-'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -439,16 +423,16 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingDown className="w-5 h-5" />
-                Expense Analysis: Budget vs Actual Spent
+                Expense Analysis
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget Limit</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Spent</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Remaining</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
                   </thead>
@@ -467,11 +451,7 @@ export default function BudgetVsActual() {
                       </tr>
                     ))}
                     {expenseLines.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-gray-500">
-                          No expense data available for this period
-                        </td>
-                      </tr>
+                      <tr><td colSpan={5} className="py-8 text-center text-gray-500">No expense data available</td></tr>
                     )}
                   </tbody>
                   <tfoot>
@@ -479,12 +459,8 @@ export default function BudgetVsActual() {
                       <td className="py-3 px-4 text-gray-900">Total Expenses</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpensePlanned)}</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpenseActual)}</td>
-                      <td className={`py-3 px-4 text-right ${totalExpenseDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(totalExpenseDifference)}
-                      </td>
-                      <td className="py-3 px-4 text-right text-gray-900">
-                        {totalExpensePlanned > 0 ? `${((totalExpenseActual / totalExpensePlanned) * 100).toFixed(1)}%` : '-'}
-                      </td>
+                      <td className={`py-3 px-4 text-right ${totalExpenseDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalExpenseDifference)}</td>
+                      <td className="py-3 px-4 text-right text-gray-900">{totalExpensePlanned > 0 ? `${((totalExpenseActual / totalExpensePlanned) * 100).toFixed(1)}%` : '-'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -498,10 +474,10 @@ export default function BudgetVsActual() {
                 <span className="text-lg font-bold text-gray-900">Net Period Position (Income - Expenses)</span>
                 <div className="text-right">
                   <div className="text-sm text-gray-600">
-                    Accrued Net: <span className="font-semibold text-gray-900">{formatCurrency(netPlanned)}</span>
+                    Planned: <span className="font-semibold text-gray-900">{formatCurrency(netPlanned)}</span>
                   </div>
                   <div className="text-sm text-gray-600">
-                    Actual Net: <span className="font-semibold text-gray-900">{formatCurrency(netActual)}</span>
+                    Actual: <span className="font-semibold text-gray-900">{formatCurrency(netActual)}</span>
                   </div>
                   <div className="text-lg font-bold mt-1">
                     Variance: <span className={netDifference >= 0 ? 'text-green-600' : 'text-red-600'}>
