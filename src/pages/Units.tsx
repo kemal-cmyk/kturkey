@@ -18,13 +18,10 @@ export default function Units() {
   const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
-  
-  // Data for the expanded view
   const [unitDetails, setUnitDetails] = useState<{
-    dues: Array<{ id: string; month_date: string; total_amount: number; status: string; currency_code: string }>;
+    dues: Array<{ id: string; month_date: string; total_amount: number; paid_amount: number; status: string; currency_code: string }>;
     payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string }>;
   } | null>(null);
-  
   const [loadingDetails, setLoadingDetails] = useState(false);
 
   const isAdmin = currentRole?.role === 'admin';
@@ -75,35 +72,51 @@ export default function Units() {
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
       currency: currencyCode,
-      minimumFractionDigits: 2,
+      minimumFractionDigits: 0,
     }).format(amount);
   };
 
   const fetchUnitDetails = async (unitId: string) => {
     setLoadingDetails(true);
 
-    // 1. Fetch Dues (Charges)
-    // Filter out cancelled dues to prevent wrong debt calculation
-    const duesRes = await supabase
-        .from('dues')
-        .select('id, month_date, total_amount, status, currency_code')
-        .eq('unit_id', unitId)
-        .neq('status', 'cancelled') 
-        .order('month_date', { ascending: false });
+    const paymentIdsRes = await supabase
+      .from('payments')
+      .select('id')
+      .eq('unit_id', unitId);
 
-    // 2. Fetch Payments (Actual Transactions)
-    // We use the 'payments' table directly to avoid double-counting from ledger splits
-    const paymentsRes = await supabase
-        .from('payments')
-        .select('*')
+    const paymentIds = (paymentIdsRes.data || []).map(p => p.id);
+
+    const [duesRes, ledgerRes] = await Promise.all([
+      supabase
+        .from('dues')
+        .select('id, month_date, total_amount, paid_amount, status, currency_code')
         .eq('unit_id', unitId)
-        .order('payment_date', { ascending: false });
+        .order('month_date', { ascending: false }),
+      paymentIds.length > 0
+        ? supabase
+            .from('ledger_entries')
+            .select('id, amount, entry_date, description, payment_id, payments(payment_date, payment_method, reference_no, amount, currency_code)')
+            .eq('entry_type', 'income')
+            .in('payment_id', paymentIds)
+            .not('payment_id', 'is', null)
+            .order('entry_date', { ascending: false })
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    const formattedPayments = (ledgerRes.data || []).map(entry => ({
+      id: entry.id,
+      amount: entry.payments?.amount || entry.amount,
+      payment_date: entry.payments?.payment_date || entry.entry_date,
+      payment_method: entry.payments?.payment_method || 'bank_transfer',
+      reference_no: entry.payments?.reference_no || null,
+      description: entry.description,
+      currency_code: entry.payments?.currency_code || 'TRY',
+    }));
 
     setUnitDetails({
       dues: duesRes.data || [],
-      payments: paymentsRes.data || [], 
+      payments: formattedPayments,
     });
-    
     setLoadingDetails(false);
   };
 
@@ -306,94 +319,94 @@ export default function Units() {
                                 {(() => {
                                   const unit = units.find(u => u.id === expandedUnit);
                                   const openingBalance = unit?.balance?.opening_balance || 0;
-                                  
-                                  // --- Group by Currency Logic ---
-                                  // We can't simply sum everything into one number if currencies differ.
-                                  // We will create a map: Currency -> { Dues, Paid }
-                                  
-                                  const totals: Record<string, { dues: number; paid: number }> = {};
-                                  
-                                  // 1. Add Opening Balance (Assume default currency)
-                                  const defCurr = currentSite?.default_currency || 'TRY';
-                                  if (!totals[defCurr]) totals[defCurr] = { dues: 0, paid: 0 };
-                                  if (openingBalance > 0) totals[defCurr].dues += openingBalance; // Debt
-                                  else totals[defCurr].paid += Math.abs(openingBalance); // Credit
-                                  
-                                  // 2. Sum Dues per Currency
-                                  unitDetails.dues.forEach(d => {
-                                      const curr = d.currency_code || defCurr;
-                                      if (!totals[curr]) totals[curr] = { dues: 0, paid: 0 };
-                                      totals[curr].dues += Number(d.total_amount);
-                                  });
-                                  
-                                  // 3. Sum Payments per Currency (Source of Truth)
-                                  unitDetails.payments.forEach(p => {
-                                      const curr = p.currency_code || defCurr;
-                                      if (!totals[curr]) totals[curr] = { dues: 0, paid: 0 };
-                                      totals[curr].paid += Number(p.amount);
-                                  });
+                                  const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
 
-                                  const currencies = Object.keys(totals);
+                                  // Use the paid_amount from dues table - it has the correct converted amounts
+                                  const totalPaid = unitDetails.dues.reduce((sum, due) => sum + Number(due.paid_amount), 0);
+                                  const duesCurrency = unitDetails.dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
+                                  const displayCurrency = duesCurrency;
+
+                                  const totalDebt = openingBalance + totalDues - totalPaid;
+                                  const totalAmountDue = totalDues + openingBalance;
+                                  const paymentPercentage = totalAmountDue > 0 ? (totalPaid / totalAmountDue) * 100 : 0;
 
                                   return (
                                     <div className="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-white to-blue-50 border-2 border-blue-200 shadow-md">
                                       <h4 className="text-base font-bold text-gray-900 mb-4 flex items-center">
                                         <DollarSign className="w-5 h-5 mr-2 text-blue-600" />
-                                        Financial Summary
+                                        Financial Summary (Accrual-Based)
                                       </h4>
 
-                                      {/* Multi-Currency Cards */}
-                                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
-                                        {currencies.map(curr => {
-                                            const { dues, paid } = totals[curr];
-                                            const balance = dues - paid;
-                                            
-                                            return (
-                                                <div key={curr} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-                                                    <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-100">
-                                                        <span className="font-bold text-gray-700">{curr} Account</span>
-                                                        <span className={`text-xs px-2 py-1 rounded-full ${balance > 0 ? 'bg-red-100 text-red-700' : balance < 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                                                            {balance > 0 ? 'Debt' : balance < 0 ? 'Credit' : 'Settled'}
-                                                        </span>
-                                                    </div>
-                                                    <div className="space-y-2 text-sm">
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-500">Total Charged:</span>
-                                                            <span className="font-medium text-gray-900">{formatCurrency(dues, curr)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between">
-                                                            <span className="text-gray-500">Total Paid:</span>
-                                                            <span className="font-medium text-green-600">{formatCurrency(paid, curr)}</span>
-                                                        </div>
-                                                        <div className="flex justify-between pt-2 border-t border-gray-100">
-                                                            <span className="font-semibold text-gray-700">Net Balance:</span>
-                                                            <span className={`font-bold ${balance > 0 ? 'text-red-600' : balance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                                                                {formatCurrency(Math.abs(balance), curr)}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
+                                      <div className="grid grid-cols-4 gap-4 mb-4">
+                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-gray-100">
+                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Opening Balance</div>
+                                          <div className={`text-xl font-bold ${openingBalance > 0 ? 'text-red-600' : openingBalance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                                            {formatCurrency(Math.abs(openingBalance), displayCurrency)}
+                                          </div>
+                                          <div className="text-xs text-gray-500 mt-1">Previous period</div>
+                                        </div>
+                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-gray-100">
+                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Total Dues</div>
+                                          <div className="text-xl font-bold text-gray-900">
+                                            {formatCurrency(totalDues, displayCurrency)}
+                                          </div>
+                                          <div className="text-xs text-gray-500 mt-1">Accrued fees</div>
+                                        </div>
+                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-green-100">
+                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Total Paid</div>
+                                          <div className="text-xl font-bold text-green-600">{formatCurrency(totalPaid, displayCurrency)}</div>
+                                          <div className="text-xs text-gray-500 mt-1">{unitDetails.payments.length} payments</div>
+                                        </div>
+                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-red-100">
+                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Balance</div>
+                                          <div className={`text-xl font-bold ${totalDebt > 0 ? 'text-red-600' : totalDebt < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                                            {formatCurrency(Math.abs(totalDebt), displayCurrency)}
+                                          </div>
+                                          <div className={`text-xs mt-1 ${totalDebt > 0 ? 'text-red-600' : totalDebt < 0 ? 'text-green-600' : 'text-gray-500'}`}>
+                                            {totalDebt > 0 ? 'Outstanding' : totalDebt < 0 ? 'Overpayment' : 'Balanced'}
+                                          </div>
+                                        </div>
                                       </div>
 
-                                      {/* Progress Bar (Aggregate) */}
                                       <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                                         <div className="flex justify-between items-center mb-3">
-                                          <span className="text-sm font-semibold text-gray-700">Recent Payment Activity</span>
-                                          <span className="text-xs text-gray-500">Showing last {unitDetails.payments.length} payments</span>
+                                          <span className="text-sm font-semibold text-gray-700">Payment Progress</span>
+                                          <span className="text-sm font-bold text-blue-600">{paymentPercentage.toFixed(1)}%</span>
                                         </div>
-                                        {/* Simplified bar, just visual */}
-                                        <div className="relative w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                                          <div className="absolute top-0 left-0 h-full bg-blue-500 rounded-full w-full opacity-20"></div>
+                                        <div className="relative w-full h-6 bg-gray-200 rounded-full overflow-hidden shadow-inner">
+                                          <div
+                                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-green-500 via-green-600 to-green-500 transition-all duration-500 rounded-full"
+                                            style={{ width: `${Math.min(paymentPercentage, 100)}%` }}
+                                          />
+                                          <div className="absolute inset-0 flex items-center justify-center">
+                                            <span className="text-xs font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                                              {totalPaid > 0 ? `${formatCurrency(totalPaid, displayCurrency)} of ${formatCurrency(totalAmountDue, displayCurrency)}` : 'No payments yet'}
+                                            </span>
+                                          </div>
                                         </div>
+                                        {totalDebt > 0 && (
+                                          <div className="mt-3 flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-200">
+                                            <span className="text-sm font-medium text-red-700">Outstanding Balance:</span>
+                                            <span className="text-lg font-bold text-red-600">{formatCurrency(totalDebt, displayCurrency)}</span>
+                                          </div>
+                                        )}
+                                        {totalDebt < 0 && (
+                                          <div className="mt-3 flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-200">
+                                            <span className="text-sm font-medium text-green-700">Overpayment:</span>
+                                            <span className="text-lg font-bold text-green-600">{formatCurrency(Math.abs(totalDebt), displayCurrency)}</span>
+                                          </div>
+                                        )}
+                                        {totalDebt === 0 && totalAmountDue > 0 && (
+                                          <div className="mt-3 flex items-center justify-center p-3 bg-green-50 rounded-lg border border-green-200">
+                                            <span className="text-sm font-bold text-green-700">All payments completed!</span>
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
                                 })()}
 
                                 <div className="grid grid-cols-2 gap-6">
-                                  {/* Accrued Dues Section */}
                                   <div>
                                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center justify-between">
                                       <span className="flex items-center">
@@ -402,7 +415,7 @@ export default function Units() {
                                       </span>
                                       {unitDetails.dues.length > 0 && (
                                         <span className="text-xs text-gray-500 font-normal">
-                                          {unitDetails.dues.length} records
+                                          {unitDetails.dues.filter(d => d.status !== 'paid').length} unpaid
                                         </span>
                                       )}
                                     </h4>
@@ -413,11 +426,30 @@ export default function Units() {
                                         unitDetails.dues.map((due) => (
                                           <div
                                             key={due.id}
-                                            className={`p-3 rounded-lg border bg-white border-gray-200`}
+                                            className={`p-3 rounded-lg border ${
+                                              due.status === 'paid'
+                                                ? 'bg-green-50 border-green-200'
+                                                : due.status === 'overdue'
+                                                ? 'bg-red-50 border-red-200'
+                                                : due.status === 'partial'
+                                                ? 'bg-amber-50 border-amber-200'
+                                                : 'bg-white border-gray-200'
+                                            }`}
                                           >
                                             <div className="flex justify-between items-start mb-2">
                                               <span className="text-sm font-semibold text-gray-900">
                                                 {format(new Date(due.month_date), 'MMMM yyyy')}
+                                              </span>
+                                              <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${
+                                                due.status === 'paid'
+                                                  ? 'bg-green-100 text-green-700'
+                                                  : due.status === 'overdue'
+                                                  ? 'bg-red-100 text-red-700'
+                                                  : due.status === 'partial'
+                                                  ? 'bg-amber-100 text-amber-700'
+                                                  : 'bg-gray-100 text-gray-700'
+                                              }`}>
+                                                {due.status}
                                               </span>
                                             </div>
                                             <div className="space-y-1">
@@ -425,6 +457,18 @@ export default function Units() {
                                                 <span className="text-gray-600">Total:</span>
                                                 <span className="font-medium text-gray-900">{formatCurrency(Number(due.total_amount), due.currency_code)}</span>
                                               </div>
+                                              {due.paid_amount > 0 && (
+                                                <div className="flex justify-between items-center text-sm">
+                                                  <span className="text-gray-600">Paid:</span>
+                                                  <span className="font-medium text-green-600">{formatCurrency(Number(due.paid_amount), due.currency_code)}</span>
+                                                </div>
+                                              )}
+                                              {due.status === 'partial' && (
+                                                <div className="flex justify-between items-center text-sm">
+                                                  <span className="text-gray-600">Remaining:</span>
+                                                  <span className="font-medium text-red-600">{formatCurrency(Number(due.total_amount) - Number(due.paid_amount), due.currency_code)}</span>
+                                                </div>
+                                              )}
                                             </div>
                                           </div>
                                         ))
@@ -432,7 +476,6 @@ export default function Units() {
                                     </div>
                                   </div>
 
-                                  {/* Payments Section */}
                                   <div>
                                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
                                       <Receipt className="w-4 h-4 mr-2" />
