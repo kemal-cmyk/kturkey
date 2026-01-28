@@ -19,11 +19,10 @@ export default function Units() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
   
-  // Refined State for Details
+  // Data for the expanded view
   const [unitDetails, setUnitDetails] = useState<{
     dues: Array<{ id: string; month_date: string; total_amount: number; status: string; currency_code: string }>;
     payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string }>;
-    totalPaidCalculated: number; // Correct sum from Ledger
   } | null>(null);
   
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -80,46 +79,29 @@ export default function Units() {
     }).format(amount);
   };
 
-  // ✅ FIXED LOGIC: Separated Data Sources for Accuracy
   const fetchUnitDetails = async (unitId: string) => {
     setLoadingDetails(true);
 
     // 1. Fetch Dues (Charges)
+    // Filter out cancelled dues to prevent wrong debt calculation
     const duesRes = await supabase
         .from('dues')
         .select('id, month_date, total_amount, status, currency_code')
         .eq('unit_id', unitId)
+        .neq('status', 'cancelled') 
         .order('month_date', { ascending: false });
 
-    // 2. Fetch Payments (The List) - Directly from payments table for clean history
+    // 2. Fetch Payments (Actual Transactions)
+    // We use the 'payments' table directly to avoid double-counting from ledger splits
     const paymentsRes = await supabase
         .from('payments')
         .select('*')
         .eq('unit_id', unitId)
         .order('payment_date', { ascending: false });
 
-    // 3. Fetch Ledger Income (The Sum) - For accurate "Total Paid" calculation
-    // We sum up the actual credits applied to the unit's account
-    const ledgerRes = await supabase
-        .from('ledger_entries')
-        .select('amount, amount_reporting_try')
-        .eq('account_id', unitId) // Assuming unit_id links to account or filtered by context
-        // Actually, ledger_entries usually link via 'payment_id' or we filter by unit context.
-        // Since units don't always have a direct account_id in ledger in some schemas, 
-        // we rely on the fact that 'payments' create ledger entries.
-        // Let's filter ledger entries BY the payment IDs we just found.
-        .in('payment_id', (paymentsRes.data || []).map(p => p.id))
-        .eq('entry_type', 'income');
-
-    // Calculate Total Paid correctly using Ledger amounts (handles currency reporting/splits)
-    const totalPaidVal = (ledgerRes.data || []).reduce((sum, entry) => {
-        return sum + Number(entry.amount_reporting_try || entry.amount);
-    }, 0);
-
     setUnitDetails({
       dues: duesRes.data || [],
-      payments: paymentsRes.data || [], // Clean list of payments
-      totalPaidCalculated: totalPaidVal
+      payments: paymentsRes.data || [], 
     });
     
     setLoadingDetails(false);
@@ -325,70 +307,85 @@ export default function Units() {
                                   const unit = units.find(u => u.id === expandedUnit);
                                   const openingBalance = unit?.balance?.opening_balance || 0;
                                   
-                                  // Use Calculated Values
-                                  const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
-                                  const totalPaid = unitDetails.totalPaidCalculated; // ✅ Correct Value
+                                  // --- Group by Currency Logic ---
+                                  // We can't simply sum everything into one number if currencies differ.
+                                  // We will create a map: Currency -> { Dues, Paid }
                                   
-                                  const duesCurrency = unitDetails.dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
-                                  const displayCurrency = duesCurrency;
+                                  const totals: Record<string, { dues: number; paid: number }> = {};
+                                  
+                                  // 1. Add Opening Balance (Assume default currency)
+                                  const defCurr = currentSite?.default_currency || 'TRY';
+                                  if (!totals[defCurr]) totals[defCurr] = { dues: 0, paid: 0 };
+                                  if (openingBalance > 0) totals[defCurr].dues += openingBalance; // Debt
+                                  else totals[defCurr].paid += Math.abs(openingBalance); // Credit
+                                  
+                                  // 2. Sum Dues per Currency
+                                  unitDetails.dues.forEach(d => {
+                                      const curr = d.currency_code || defCurr;
+                                      if (!totals[curr]) totals[curr] = { dues: 0, paid: 0 };
+                                      totals[curr].dues += Number(d.total_amount);
+                                  });
+                                  
+                                  // 3. Sum Payments per Currency (Source of Truth)
+                                  unitDetails.payments.forEach(p => {
+                                      const curr = p.currency_code || defCurr;
+                                      if (!totals[curr]) totals[curr] = { dues: 0, paid: 0 };
+                                      totals[curr].paid += Number(p.amount);
+                                  });
 
-                                  const totalDebt = openingBalance + totalDues - totalPaid;
-                                  const totalAmountDue = totalDues + openingBalance;
-                                  const paymentPercentage = totalAmountDue > 0 ? (totalPaid / totalAmountDue) * 100 : 0;
+                                  const currencies = Object.keys(totals);
 
                                   return (
                                     <div className="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-white to-blue-50 border-2 border-blue-200 shadow-md">
                                       <h4 className="text-base font-bold text-gray-900 mb-4 flex items-center">
                                         <DollarSign className="w-5 h-5 mr-2 text-blue-600" />
-                                        Financial Summary (Accrual-Based)
+                                        Financial Summary
                                       </h4>
 
-                                      <div className="grid grid-cols-4 gap-4 mb-4">
-                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-gray-100">
-                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Opening Balance</div>
-                                          <div className={`text-xl font-bold ${openingBalance > 0 ? 'text-red-600' : openingBalance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                                            {formatCurrency(Math.abs(openingBalance), displayCurrency)}
-                                          </div>
-                                          <div className="text-xs text-gray-500 mt-1">Previous period</div>
-                                        </div>
-                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-gray-100">
-                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Total Dues</div>
-                                          <div className="text-xl font-bold text-gray-900">
-                                            {formatCurrency(totalDues, displayCurrency)}
-                                          </div>
-                                          <div className="text-xs text-gray-500 mt-1">Accrued fees</div>
-                                        </div>
-                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-green-100">
-                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Total Paid</div>
-                                          <div className="text-xl font-bold text-green-600">{formatCurrency(totalPaid, displayCurrency)}</div>
-                                          <div className="text-xs text-gray-500 mt-1">{unitDetails.payments.length} payments</div>
-                                        </div>
-                                        <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-red-100">
-                                          <div className="text-xs font-medium text-gray-600 mb-1.5">Balance</div>
-                                          <div className={`text-xl font-bold ${totalDebt > 0 ? 'text-red-600' : totalDebt < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                                            {formatCurrency(Math.abs(totalDebt), displayCurrency)}
-                                          </div>
-                                          <div className={`text-xs mt-1 ${totalDebt > 0 ? 'text-red-600' : totalDebt < 0 ? 'text-green-600' : 'text-gray-500'}`}>
-                                            {totalDebt > 0 ? 'Outstanding' : totalDebt < 0 ? 'Overpayment' : 'Balanced'}
-                                          </div>
-                                        </div>
+                                      {/* Multi-Currency Cards */}
+                                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+                                        {currencies.map(curr => {
+                                            const { dues, paid } = totals[curr];
+                                            const balance = dues - paid;
+                                            
+                                            return (
+                                                <div key={curr} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+                                                    <div className="flex justify-between items-center mb-2 pb-2 border-b border-gray-100">
+                                                        <span className="font-bold text-gray-700">{curr} Account</span>
+                                                        <span className={`text-xs px-2 py-1 rounded-full ${balance > 0 ? 'bg-red-100 text-red-700' : balance < 0 ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+                                                            {balance > 0 ? 'Debt' : balance < 0 ? 'Credit' : 'Settled'}
+                                                        </span>
+                                                    </div>
+                                                    <div className="space-y-2 text-sm">
+                                                        <div className="flex justify-between">
+                                                            <span className="text-gray-500">Total Charged:</span>
+                                                            <span className="font-medium text-gray-900">{formatCurrency(dues, curr)}</span>
+                                                        </div>
+                                                        <div className="flex justify-between">
+                                                            <span className="text-gray-500">Total Paid:</span>
+                                                            <span className="font-medium text-green-600">{formatCurrency(paid, curr)}</span>
+                                                        </div>
+                                                        <div className="flex justify-between pt-2 border-t border-gray-100">
+                                                            <span className="font-semibold text-gray-700">Net Balance:</span>
+                                                            <span className={`font-bold ${balance > 0 ? 'text-red-600' : balance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                                                                {formatCurrency(Math.abs(balance), curr)}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
                                       </div>
 
+                                      {/* Progress Bar (Aggregate) */}
                                       <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                                         <div className="flex justify-between items-center mb-3">
-                                          <span className="text-sm font-semibold text-gray-700">Payment Progress</span>
-                                          <span className="text-sm font-bold text-blue-600">{paymentPercentage.toFixed(1)}%</span>
+                                          <span className="text-sm font-semibold text-gray-700">Recent Payment Activity</span>
+                                          <span className="text-xs text-gray-500">Showing last {unitDetails.payments.length} payments</span>
                                         </div>
-                                        <div className="relative w-full h-6 bg-gray-200 rounded-full overflow-hidden shadow-inner">
-                                          <div
-                                            className="absolute top-0 left-0 h-full bg-gradient-to-r from-green-500 via-green-600 to-green-500 transition-all duration-500 rounded-full"
-                                            style={{ width: `${Math.min(paymentPercentage, 100)}%` }}
-                                          />
-                                          <div className="absolute inset-0 flex items-center justify-center">
-                                            <span className="text-xs font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                                              {totalPaid > 0 ? `${formatCurrency(totalPaid, displayCurrency)} of ${formatCurrency(totalAmountDue, displayCurrency)}` : 'No payments yet'}
-                                            </span>
-                                          </div>
+                                        {/* Simplified bar, just visual */}
+                                        <div className="relative w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                                          <div className="absolute top-0 left-0 h-full bg-blue-500 rounded-full w-full opacity-20"></div>
                                         </div>
                                       </div>
                                     </div>
@@ -396,7 +393,7 @@ export default function Units() {
                                 })()}
 
                                 <div className="grid grid-cols-2 gap-6">
-                                  {/* Accrued Dues Section - Now using direct Dues list */}
+                                  {/* Accrued Dues Section */}
                                   <div>
                                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center justify-between">
                                       <span className="flex items-center">
@@ -435,7 +432,7 @@ export default function Units() {
                                     </div>
                                   </div>
 
-                                  {/* Payments Section - Direct from Payments table */}
+                                  {/* Payments Section */}
                                   <div>
                                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
                                       <Receipt className="w-4 h-4 mr-2" />
