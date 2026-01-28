@@ -101,75 +101,77 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FIXED LOGIC: Strict Income vs Expense Separation
+  // ✅ FIXED LOGIC: Strict Separation based on Entry Type
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
-    // 1. Identify all unique categories used in Budget OR Ledger
-    const allCategories = new Set<string>();
-    categories.forEach(c => allCategories.add(c.category_name));
-    entries.forEach(e => {
-        if (e.category !== 'Transfer') allCategories.add(e.category);
-    });
+    // 1. Initialize Maps
+    const incomeMap = new Map<string, { planned: number, actual: number }>();
+    const expenseMap = new Map<string, { planned: number, actual: number }>();
 
-    const incomeLinesTemp: ReportLine[] = [];
-    const expenseLinesTemp: ReportLine[] = [];
+    // 2. Process Budget (Planned)
+    // We must decide if a budget category is "Income Target" or "Expense Limit"
+    categories.forEach(cat => {
+        // Standard keywords for Income Budget Items
+        const isIncomeBudget = ['Maintenance', 'Fee', 'Dues', 'Aidat', 'Income', 'Interest', 'Revenue'].some(k => 
+            cat.category_name.includes(k)
+        );
 
-    // 2. Define Strict Income Keywords (The Logic you requested)
-    const STRICT_INCOME_KEYWORDS = ['Maintenance', 'Fee', 'Dues', 'Aidat', 'Income', 'Interest'];
-
-    allCategories.forEach(catName => {
-        // Calculate Totals (Converted to TRY)
-        const incomeSum = entries
-            .filter(e => e.category === catName && e.entry_type === 'income')
-            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-        const expenseSum = entries
-            .filter(e => e.category === catName && e.entry_type === 'expense')
-            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-        const budgetItem = categories.find(c => c.category_name === catName);
-        const plannedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
-
-        // 3. Determine if this category is strictly Income
-        const isStrictlyIncome = STRICT_INCOME_KEYWORDS.some(k => catName.includes(k));
-
-        if (isStrictlyIncome) {
-             // ---> ADD TO INCOME TABLE
-             // Even if there are expenses (refunds), we net them against income here
-             const netActualIncome = incomeSum - expenseSum; 
-             
-             // Only add if relevant (has budget OR has actuals)
-             if (plannedAmount > 0 || Math.abs(netActualIncome) > 0) {
-                 incomeLinesTemp.push({
-                    category: catName,
-                    planned: plannedAmount, // "Accrual" Target
-                    actual: netActualIncome, // Actual Collected (minus refunds)
-                    difference: netActualIncome - plannedAmount,
-                    percentage: plannedAmount > 0 ? (netActualIncome / plannedAmount) * 100 : 0
-                 });
-             }
+        if (isIncomeBudget) {
+            incomeMap.set(cat.category_name, { planned: Number(cat.planned_amount), actual: 0 });
         } else {
-            // ---> ADD TO EXPENSE TABLE
-            // Standard Expense Logic
-            const netActualExpense = expenseSum - incomeSum; // Net expenses (minus any refunds/rebates)
-
-            if (plannedAmount > 0 || Math.abs(netActualExpense) > 0) {
-                expenseLinesTemp.push({
-                    category: catName,
-                    planned: plannedAmount, // Spending Budget
-                    actual: netActualExpense, // Actual Spent
-                    difference: plannedAmount - netActualExpense, // Remaining Budget
-                    percentage: plannedAmount > 0 ? (netActualExpense / plannedAmount) * 100 : 0
-                });
-            }
+            expenseMap.set(cat.category_name, { planned: Number(cat.planned_amount), actual: 0 });
         }
     });
 
-    // 4. Sort by Actual Amount (Highest first)
-    incomeLinesTemp.sort((a, b) => b.actual - a.actual);
-    expenseLinesTemp.sort((a, b) => b.actual - a.actual);
+    // 3. Process Ledger (Actuals)
+    entries.forEach(e => {
+        if (e.category === 'Transfer') return; // Ignore transfers
 
-    setIncomeLines(incomeLinesTemp);
-    setExpenseLines(expenseLinesTemp);
+        const amount = Number(e.amount_reporting_try || e.amount);
+
+        if (e.entry_type === 'income') {
+            // STRICTLY INCOME TABLE
+            if (!incomeMap.has(e.category)) {
+                // Found an unbudgeted income source
+                incomeMap.set(e.category, { planned: 0, actual: 0 });
+            }
+            const data = incomeMap.get(e.category)!;
+            data.actual += amount;
+        } else if (e.entry_type === 'expense') {
+            // STRICTLY EXPENSE TABLE
+            if (!expenseMap.has(e.category)) {
+                // Found an unbudgeted expense
+                expenseMap.set(e.category, { planned: 0, actual: 0 });
+            }
+            const data = expenseMap.get(e.category)!;
+            data.actual += amount;
+        }
+    });
+
+    // 4. Format Output
+    const formatLine = (map: Map<string, { planned: number, actual: number }>, type: 'income' | 'expense') => {
+        return Array.from(map.entries())
+            .map(([category, data]) => {
+                let difference = 0;
+                let percentage = 0;
+
+                if (type === 'income') {
+                    // Income: Actual - Planned (Positive difference is GOOD/Surplus)
+                    difference = data.actual - data.planned;
+                    percentage = data.planned > 0 ? (data.actual / data.planned) * 100 : 0;
+                } else {
+                    // Expense: Planned - Actual (Positive difference is GOOD/Under Budget)
+                    difference = data.planned - data.actual;
+                    percentage = data.planned > 0 ? (data.actual / data.planned) * 100 : 0;
+                }
+
+                return { category, planned: data.planned, actual: data.actual, difference, percentage };
+            })
+            .filter(line => line.planned > 0 || line.actual > 0) // Hide empty rows
+            .sort((a, b) => b.planned - a.planned); // Sort by biggest budget items
+    };
+
+    setIncomeLines(formatLine(incomeMap, 'income'));
+    setExpenseLines(formatLine(expenseMap, 'expense'));
   };
 
   const formatCurrency = (amount: number) => {
@@ -270,7 +272,7 @@ export default function BudgetVsActual() {
                 <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
               </div>
               <div>
-                <p className="text-sm text-white/70 mb-1">Net Period Change</p>
+                <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
