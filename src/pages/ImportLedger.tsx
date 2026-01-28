@@ -31,7 +31,7 @@ export default function ImportLedger() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [mappedData, setMappedData] = useState<MappedEntry[]>([]);
   
-  // Updated Mapping State to include Currency
+  // Updated Mapping State
   const [columnMapping, setColumnMapping] = useState({
     entry_date: '',
     account: '',
@@ -40,8 +40,8 @@ export default function ImportLedger() {
     debit: '',
     credit: '',
     unit_number: '',
-    currency: '',       // New
-    exchange_rate: ''   // New
+    currency: '',
+    exchange_rate: ''
   });
   
   const [fiscalPeriods, setFiscalPeriods] = useState<any[]>([]);
@@ -60,7 +60,6 @@ export default function ImportLedger() {
     }
   }, [currentSite]);
 
-  // ... [Keep loadFiscalPeriods, loadUnits, loadCategories, loadAccounts exactly as they were] ...
   const loadFiscalPeriods = async () => {
     if (!currentSite) return;
     const { data } = await supabase
@@ -116,10 +115,11 @@ export default function ImportLedger() {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        // Use cellDates: true to let SheetJS try to identify dates automatically
         const workbook = XLSX.read(data, { type: 'array', cellDates: true });
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
         const jsonData = XLSX.utils.sheet_to_json(firstSheet, {
-          raw: false,
+          raw: false, // Attempt to format data as strings to preserve user input look
           defval: '',
           blankrows: false
         });
@@ -156,23 +156,57 @@ export default function ImportLedger() {
     reader.readAsArrayBuffer(uploadedFile);
   };
 
-  const parseDDMMYYYYDate = (dateStr: string): string => {
-    if (!dateStr) return '';
-    // Handle Excel serial dates if passed as string/number
-    if (!isNaN(Number(dateStr)) && !dateStr.includes('.')) {
-        // Simple heuristic for Excel serial date, though 'raw: false' usually handles this
-        return new Date((Number(dateStr) - (25567 + 2)) * 86400 * 1000).toISOString().split('T')[0];
+  // ✅ NEW: Robust Date Parser that handles Serial, MM/DD/YYYY, and DD.MM.YYYY
+  const parseFlexibleDate = (dateVal: any): string => {
+    if (!dateVal) return '';
+
+    // 1. Handle JS Date Objects (from XLSX cellDates: true)
+    if (dateVal instanceof Date) {
+        return dateVal.toISOString().split('T')[0];
     }
-    const parts = dateStr.split('.');
-    if (parts.length === 3) {
-      const [day, month, year] = parts;
-      return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+
+    // 2. Handle Excel Serial Numbers (e.g., 45306)
+    // Check if it's a number, or a string that is purely numeric
+    if (typeof dateVal === 'number' || (!isNaN(Number(dateVal)) && !String(dateVal).includes('.') && !String(dateVal).includes('/') && !String(dateVal).includes('-'))) {
+      const serial = Number(dateVal);
+      // Excel base date is Dec 30, 1899. This formula converts it to JS Date.
+      const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
+      // Fix for timezone offset issues causing "one day off" errors
+      const offset = date.getTimezoneOffset() * 60 * 1000;
+      const adjustedDate = new Date(date.getTime() + offset); 
+      return adjustedDate.toISOString().split('T')[0];
     }
-    // Try standard ISO
+
+    const dateStr = String(dateVal).trim();
+
+    // 3. Handle "DD.MM.YYYY" (Turkish/European standard)
+    if (dateStr.includes('.')) {
+      const parts = dateStr.split('.');
+      if (parts.length === 3) {
+        const [day, month, year] = parts;
+        const fullYear = year.length === 2 ? `20${year}` : year;
+        return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      }
+    }
+
+    // 4. Handle "MM/DD/YYYY" (US/Excel Default standard - as requested)
+    if (dateStr.includes('/')) {
+      const parts = dateStr.split('/');
+      if (parts.length === 3) {
+        // Assume MM/DD/YYYY
+        const [month, day, year] = parts;
+        const fullYear = year.length === 2 ? `20${year}` : year;
+        return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      }
+    }
+
+    // 5. Handle ISO "YYYY-MM-DD"
     const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+    if (!isNaN(d.getTime())) {
+        return d.toISOString().split('T')[0];
+    }
     
-    return dateStr;
+    return ''; // Invalid
   };
 
   const handleMapping = () => {
@@ -196,8 +230,10 @@ export default function ImportLedger() {
       const currency = columnMapping.currency ? (row[columnMapping.currency] || 'TRY') : 'TRY';
       const rate = columnMapping.exchange_rate ? (parseFloat(row[columnMapping.exchange_rate]) || 1.0) : 1.0;
 
-      const rawDate = row[columnMapping.entry_date] || '';
-      const parsedDate = parseDDMMYYYYDate(String(rawDate));
+      const rawDate = row[columnMapping.entry_date]; // Don't stringify yet, preserve types
+      
+      // ✅ USE NEW PARSER
+      const parsedDate = parseFlexibleDate(rawDate);
 
       const entry: MappedEntry = {
         entry_date: parsedDate,
@@ -335,7 +371,7 @@ export default function ImportLedger() {
   };
 
   const downloadTemplate = () => {
-    // Enhanced template with Currency columns
+    // ✅ Updated Template to use MM/DD/YYYY format clearly
     const template = [
       {
         'Date': '01/15/2024',
