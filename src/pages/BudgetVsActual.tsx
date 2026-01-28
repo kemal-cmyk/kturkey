@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar, Wallet } from 'lucide-react';
 import { format } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
+// ✅ IMPORT THE OFFICIAL CONSTANTS
+import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '../lib/constants';
 
 interface ReportLine {
   category: string;
@@ -99,10 +101,10 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FINAL FIXED LOGIC
+  // ✅ FINAL LOGIC: Uses Official Constants + Smart Matching
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
     
-    // 1. Gather all unique categories (Budget + Ledger)
+    // 1. Gather all unique category names from Budget & Ledger
     const allCategoryNames = new Set<string>();
     categories.forEach(c => allCategoryNames.add(c.category_name));
     entries.forEach(e => {
@@ -113,32 +115,40 @@ export default function BudgetVsActual() {
     const expenseLinesTemp: ReportLine[] = [];
     const processedNames = new Set<string>();
 
-    // 2. Helper to clean strings for fuzzy matching (Budget vs Ledger)
+    // 2. Helper: Clean strings for reliable matching (removes 'payment', fixes 'communual')
     const cleanString = (str: string) => {
         return str.toLowerCase()
             .replace('communual', 'communal') // Fix typo
-            .replace('payments', '')
-            .replace('payment', '')
-            // Note: We DO NOT remove 'fee' here because 'Maintenance Fee' needs it for identification
+            .replace(/payments?|payment/g, '') // Remove 'payment' or 'payments'
+            // We KEEP 'fee' because it distinguishes 'Maintenance Fee' from 'Pool Maintenance'
             .trim();
     };
 
-    // 3. Helper to determine if a category is Income
+    // 3. Helper: Strict Income Classifier
     const checkIsIncome = (name: string) => {
-        const lower = name.toLowerCase();
-        
-        // Explicit "Maintenance Fee" check (Must have both words or be synonymous)
-        if (lower.includes('maintenance') && lower.includes('fee')) return true;
-        if (lower === 'maintenance') return false; // "Maintenance" alone is usually expense in HOAs
-        
-        // Standard Income Keywords
+        const lower = name.toLowerCase().trim();
+        const cleanName = cleanString(name);
+
+        // A. Check against OFFICIAL Income List from constants.ts
+        // This catches "Extra Fees", "Prepayments", "Other Incomes", etc.
+        const isOfficialIncome = INCOME_CATEGORIES.some(cat => {
+            const cleanCat = cleanString(cat);
+            return lower === cat.toLowerCase() || cleanName === cleanCat || lower.includes(cleanCat);
+        });
+        if (isOfficialIncome) return true;
+
+        // B. Fallback Keywords (for custom categories not in the official list)
         const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
         if (incomeKeywords.some(k => lower.includes(k))) return true;
 
-        return false;
+        // C. Special Logic for "Fee"
+        // "Maintenance Fee" is Income. "Accountant Fee" is Expense.
+        if (lower.includes('maintenance') && lower.includes('fee')) return true;
+
+        return false; // Defaults to Expense
     };
 
-    // 4. Iterate and Classify
+    // 4. Process Every Category
     Array.from(allCategoryNames).forEach(catName => {
         const cleanName = cleanString(catName);
         if (processedNames.has(cleanName)) return; // Avoid duplicates
@@ -147,13 +157,15 @@ export default function BudgetVsActual() {
         // --- CLASSIFY ---
         const isIncomeCategory = checkIsIncome(catName);
 
-        // --- FIND BUDGET ---
-        // Fuzzy match: Budget "Communal Electric" == Ledger "Communual Electric Payments"
+        // --- MATCH BUDGET ITEM ---
+        // Find budget item by matching cleaned names
         const budgetItem = categories.find(c => cleanString(c.category_name) === cleanName);
         const planned = budgetItem ? Number(budgetItem.planned_amount) : 0;
+        // Use the official budget name for display if available, otherwise raw name
         const displayName = budgetItem ? budgetItem.category_name : catName;
 
         // --- CALCULATE ACTUALS ---
+        // Find all ledger entries that match this cleaned name
         const relevantEntries = entries.filter(e => 
             e.category !== 'Transfer' && 
             cleanString(e.category) === cleanName
@@ -169,35 +181,37 @@ export default function BudgetVsActual() {
 
         // --- ASSIGN TO TABLE ---
         if (isIncomeCategory) {
-            // INCOME TABLE
-            // Net = Collections - Refunds
+            // INCOME LANE: Net = Collected - Refunds
             const actual = totalIn - totalOut;
+            
+            // Show row if there is a budget OR any activity
             if (planned > 0 || Math.abs(actual) > 0) {
                 incomeLinesTemp.push({
                     category: displayName,
                     planned,
                     actual,
-                    difference: actual - planned,
+                    difference: actual - planned, // Surplus is positive
                     percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         } else {
-            // EXPENSE TABLE (Default)
-            // Net = Spending - Rebates
+            // EXPENSE LANE: Net = Spending - Rebates
             const actual = totalOut - totalIn;
+
+            // Show row if there is a budget OR any activity
             if (planned > 0 || Math.abs(actual) > 0) {
                 expenseLinesTemp.push({
                     category: displayName,
                     planned,
                     actual,
-                    difference: planned - actual, // Under budget is positive
+                    difference: planned - actual, // Under budget is positive (Good)
                     percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         }
     });
 
-    // 5. Sort Lines
+    // 5. Sort Lines (Largest Budget First)
     incomeLinesTemp.sort((a, b) => b.planned - a.planned);
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
@@ -214,6 +228,7 @@ export default function BudgetVsActual() {
     }).format(amount);
   };
 
+  // Summary Calculations
   const totalIncomePlanned = incomeLines.reduce((sum, line) => sum + line.planned, 0);
   const totalIncomeActual = incomeLines.reduce((sum, line) => sum + line.actual, 0);
   const totalIncomeDifference = totalIncomeActual - totalIncomePlanned;
@@ -293,7 +308,7 @@ export default function BudgetVsActual() {
                 <p className="text-xs text-white/50">Initial Accounts State</p>
               </div>
               <div>
-                <p className="text-sm text-white/70 mb-1">Net Period Change</p>
+                <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
@@ -322,7 +337,7 @@ export default function BudgetVsActual() {
                   <span className="font-semibold text-blue-900">{formatCurrency(totalIncomeActual)}</span>
                 </div>
                 <div className="flex justify-between text-sm pt-1 border-t border-blue-300">
-                  <span className="text-blue-700">Variance:</span>
+                  <span className="text-blue-700">Difference:</span>
                   <span className={`font-bold ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatCurrency(totalIncomeDifference)}
                   </span>
@@ -375,16 +390,16 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingUp className="w-5 h-5" />
-                Income Analysis: Accrued vs Actual
+                Income Analysis
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Accrued (Budget)</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Collected</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Planned</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Difference</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
                   </thead>
@@ -403,11 +418,7 @@ export default function BudgetVsActual() {
                       </tr>
                     ))}
                     {incomeLines.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-gray-500">
-                          No income data available for this period
-                        </td>
-                      </tr>
+                      <tr><td colSpan={5} className="py-8 text-center text-gray-500">No income data available</td></tr>
                     )}
                   </tbody>
                   <tfoot>
@@ -415,12 +426,8 @@ export default function BudgetVsActual() {
                       <td className="py-3 px-4 text-gray-900">Total Income</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalIncomePlanned)}</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalIncomeActual)}</td>
-                      <td className={`py-3 px-4 text-right ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(totalIncomeDifference)}
-                      </td>
-                      <td className="py-3 px-4 text-right text-gray-900">
-                        {totalIncomePlanned > 0 ? `${((totalIncomeActual / totalIncomePlanned) * 100).toFixed(1)}%` : '-'}
-                      </td>
+                      <td className={`py-3 px-4 text-right ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalIncomeDifference)}</td>
+                      <td className="py-3 px-4 text-right text-gray-900">{totalIncomePlanned > 0 ? `${((totalIncomeActual / totalIncomePlanned) * 100).toFixed(1)}%` : '-'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -430,16 +437,16 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingDown className="w-5 h-5" />
-                Expense Analysis: Budget vs Actual Spent
+                Expense Analysis
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget Limit</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Spent</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Remaining</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
                   </thead>
@@ -458,11 +465,7 @@ export default function BudgetVsActual() {
                       </tr>
                     ))}
                     {expenseLines.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-gray-500">
-                          No expense data available for this period
-                        </td>
-                      </tr>
+                      <tr><td colSpan={5} className="py-8 text-center text-gray-500">No expense data available</td></tr>
                     )}
                   </tbody>
                   <tfoot>
@@ -470,12 +473,8 @@ export default function BudgetVsActual() {
                       <td className="py-3 px-4 text-gray-900">Total Expenses</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpensePlanned)}</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpenseActual)}</td>
-                      <td className={`py-3 px-4 text-right ${totalExpenseDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(totalExpenseDifference)}
-                      </td>
-                      <td className="py-3 px-4 text-right text-gray-900">
-                        {totalExpensePlanned > 0 ? `${((totalExpenseActual / totalExpensePlanned) * 100).toFixed(1)}%` : '-'}
-                      </td>
+                      <td className={`py-3 px-4 text-right ${totalExpenseDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>{formatCurrency(totalExpenseDifference)}</td>
+                      <td className="py-3 px-4 text-right text-gray-900">{totalExpensePlanned > 0 ? `${((totalExpenseActual / totalExpensePlanned) * 100).toFixed(1)}%` : '-'}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -489,10 +488,10 @@ export default function BudgetVsActual() {
                 <span className="text-lg font-bold text-gray-900">Net Period Position (Income - Expenses)</span>
                 <div className="text-right">
                   <div className="text-sm text-gray-600">
-                    Accrued Net: <span className="font-semibold text-gray-900">{formatCurrency(netPlanned)}</span>
+                    Planned: <span className="font-semibold text-gray-900">{formatCurrency(netPlanned)}</span>
                   </div>
                   <div className="text-sm text-gray-600">
-                    Actual Net: <span className="font-semibold text-gray-900">{formatCurrency(netActual)}</span>
+                    Actual: <span className="font-semibold text-gray-900">{formatCurrency(netActual)}</span>
                   </div>
                   <div className="text-lg font-bold mt-1">
                     Variance: <span className={netDifference >= 0 ? 'text-green-600' : 'text-red-600'}>
