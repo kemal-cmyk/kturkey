@@ -338,7 +338,7 @@ export default function ImportLedger() {
     // Enhanced template with Currency columns
     const template = [
       {
-        'Date': '15.01.2024',
+        'Date': '01/15/2024',
         'Account': 'Cash Account',
         'Category': 'Utilities',
         'Description': 'Electric bill',
@@ -349,7 +349,7 @@ export default function ImportLedger() {
         'Rate': 1
       },
       {
-        'Date': '16.01.2024',
+        'Date': '01/16/2024',
         'Account': 'Garanti EUR',
         'Category': 'Maintenance Fees',
         'Description': 'Jan Fee',
@@ -407,7 +407,7 @@ export default function ImportLedger() {
             <div className="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-lg text-left max-w-2xl mx-auto">
               <p className="text-sm font-semibold text-blue-900 mb-2">Instructions:</p>
               <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
-                <li>Date format: <strong>DD.MM.YYYY</strong> (e.g. 25.01.2024)</li>
+                <li>Date format: <strong>MM/DD/YYYY</strong> (e.g. 01/25/2024)</li>
                 <li><strong>Account Name</strong> must match exactly what is in your System.</li>
                 <li><strong>Currency</strong>: TRY, USD, EUR, GBP (Default: TRY).</li>
                 <li><strong>Rate</strong>: Exchange rate to TRY (Required for non-TRY).</li>
