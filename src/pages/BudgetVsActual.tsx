@@ -8,9 +8,9 @@ import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/databas
 
 interface ReportLine {
   category: string;
-  planned: number; // Budget
-  actual: number;  // Realized
-  difference: number; // Variance
+  planned: number;
+  actual: number;
+  difference: number;
   percentage: number;
 }
 
@@ -21,6 +21,8 @@ export default function BudgetVsActual() {
   const [loading, setLoading] = useState(true);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('');
+  const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -84,6 +86,9 @@ export default function BudgetVsActual() {
         .eq('is_active', true)
     ]);
 
+    setBudgetCategories(categoriesRes.data || []);
+    setLedgerEntries(entriesRes.data || []);
+
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
         const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
         return sum + (Number(acc.initial_balance) * rate);
@@ -94,145 +99,105 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FIXED LOGIC: Match Ledger Entries TO Budget Items
+  // ✅ FINAL FIXED LOGIC
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
     
-    // --- 1. SETUP HELPERS ---
-    
-    // Function to clean strings for matching
-    // Fixes typo "Communual" -> "Communal" and removes "Payments", "Fee", etc.
-    const normalize = (str: string) => {
+    // 1. Gather all unique categories (Budget + Ledger)
+    const allCategoryNames = new Set<string>();
+    categories.forEach(c => allCategoryNames.add(c.category_name));
+    entries.forEach(e => {
+        if (e.category !== 'Transfer') allCategoryNames.add(e.category);
+    });
+
+    const incomeLinesTemp: ReportLine[] = [];
+    const expenseLinesTemp: ReportLine[] = [];
+    const processedNames = new Set<string>();
+
+    // 2. Helper to clean strings for fuzzy matching (Budget vs Ledger)
+    const cleanString = (str: string) => {
         return str.toLowerCase()
-            .replace('communual', 'communal') // Fix specific typo
-            .replace(/payments?|fees?|bills?|faturasi|odemesi/g, '') // Remove noise words
-            .replace(/\s+/g, ' ') // Collapse extra spaces
+            .replace('communual', 'communal') // Fix typo
+            .replace('payments', '')
+            .replace('payment', '')
+            // Note: We DO NOT remove 'fee' here because 'Maintenance Fee' needs it for identification
             .trim();
     };
 
-    // Define strict keywords for Income Categories
-    const INCOME_KEYWORDS = ['maintenance', 'dues', 'aidat', 'extra', 'income', 'revenue', 'interest'];
-
-    // Map to hold aggregated data
-    // Key: Canonical Category Name (Official Budget Name)
-    const categoryDataMap = new Map<string, { 
-        isIncome: boolean, 
-        planned: number, 
-        actualIncome: number, 
-        actualExpense: number,
-        isUnbudgeted: boolean
-    }>();
-
-    // --- 2. INITIALIZE WITH BUDGET ITEMS ---
-    // Create "Buckets" for every budget item first.
-    categories.forEach(cat => {
-        const normName = normalize(cat.category_name);
+    // 3. Helper to determine if a category is Income
+    const checkIsIncome = (name: string) => {
+        const lower = name.toLowerCase();
         
-        // Decide if this Budget Item belongs to Income or Expense Lane
-        const isIncome = INCOME_KEYWORDS.some(k => normName.includes(k)) && 
-                         !normName.includes('repair') && 
-                         !normName.includes('service');
-
-        categoryDataMap.set(cat.category_name, {
-            isIncome,
-            planned: Number(cat.planned_amount),
-            actualIncome: 0,
-            actualExpense: 0,
-            isUnbudgeted: false
-        });
-    });
-
-    // --- 3. POUR LEDGER DATA INTO BUCKETS ---
-    entries.forEach(entry => {
-        if (entry.category === 'Transfer') return;
-
-        const normEntryCat = normalize(entry.category);
-        const amount = Number(entry.amount_reporting_try || entry.amount);
-
-        // Find best matching bucket
-        let targetKey = '';
+        // Explicit "Maintenance Fee" check (Must have both words or be synonymous)
+        if (lower.includes('maintenance') && lower.includes('fee')) return true;
+        if (lower === 'maintenance') return false; // "Maintenance" alone is usually expense in HOAs
         
-        // A. Try Exact Match (Normalized) against existing keys
-        for (const [key] of categoryDataMap) {
-            const normKey = normalize(key);
-            if (normKey === normEntryCat) {
-                targetKey = key;
-                break;
-            }
-        }
+        // Standard Income Keywords
+        const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
+        if (incomeKeywords.some(k => lower.includes(k))) return true;
 
-        // B. Try Substring Match if A failed (e.g. "Electric" inside "Communal Electric")
-        if (!targetKey) {
-            for (const [key] of categoryDataMap) {
-                const normKey = normalize(key);
-                if (normEntryCat.includes(normKey) || normKey.includes(normEntryCat)) {
-                    targetKey = key;
-                    break;
-                }
-            }
-        }
+        return false;
+    };
 
-        // C. If still no match, it's a NEW Unbudgeted Category
-        if (!targetKey) {
-            targetKey = entry.category; // Use raw name
-            // Decide Lane for new category
-            const isIncome = INCOME_KEYWORDS.some(k => normEntryCat.includes(k)) && 
-                             !normEntryCat.includes('repair') && 
-                             !normEntryCat.includes('service');
-                             
-            categoryDataMap.set(targetKey, {
-                isIncome,
-                planned: 0,
-                actualIncome: 0,
-                actualExpense: 0,
-                isUnbudgeted: true
-            });
-        }
+    // 4. Iterate and Classify
+    Array.from(allCategoryNames).forEach(catName => {
+        const cleanName = cleanString(catName);
+        if (processedNames.has(cleanName)) return; // Avoid duplicates
+        processedNames.add(cleanName);
 
-        // Add to the bucket
-        const bucket = categoryDataMap.get(targetKey)!;
-        if (entry.entry_type === 'income') {
-            bucket.actualIncome += amount;
-        } else {
-            bucket.actualExpense += amount;
-        }
-    });
+        // --- CLASSIFY ---
+        const isIncomeCategory = checkIsIncome(catName);
 
-    // --- 4. FORMAT FOR DISPLAY ---
-    const incomeLinesTemp: ReportLine[] = [];
-    const expenseLinesTemp: ReportLine[] = [];
+        // --- FIND BUDGET ---
+        // Fuzzy match: Budget "Communal Electric" == Ledger "Communual Electric Payments"
+        const budgetItem = categories.find(c => cleanString(c.category_name) === cleanName);
+        const planned = budgetItem ? Number(budgetItem.planned_amount) : 0;
+        const displayName = budgetItem ? budgetItem.category_name : catName;
 
-    categoryDataMap.forEach((data, categoryName) => {
-        
-        if (data.isIncome) {
-            // INCOME LANE: Net = Collected - Refunded
-            const netActual = data.actualIncome - data.actualExpense;
+        // --- CALCULATE ACTUALS ---
+        const relevantEntries = entries.filter(e => 
+            e.category !== 'Transfer' && 
+            cleanString(e.category) === cleanName
+        );
+
+        const totalIn = relevantEntries
+            .filter(e => e.entry_type === 'income')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
             
-            if (data.planned > 0 || Math.abs(netActual) > 0) {
+        const totalOut = relevantEntries
+            .filter(e => e.entry_type === 'expense')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+        // --- ASSIGN TO TABLE ---
+        if (isIncomeCategory) {
+            // INCOME TABLE
+            // Net = Collections - Refunds
+            const actual = totalIn - totalOut;
+            if (planned > 0 || Math.abs(actual) > 0) {
                 incomeLinesTemp.push({
-                    category: categoryName,
-                    planned: data.planned,
-                    actual: netActual,
-                    difference: netActual - data.planned,
-                    percentage: data.planned > 0 ? (netActual / data.planned) * 100 : 0
+                    category: displayName,
+                    planned,
+                    actual,
+                    difference: actual - planned,
+                    percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         } else {
-            // EXPENSE LANE: Net = Spent - Rebated
-            const netActual = data.actualExpense - data.actualIncome;
-
-            if (data.planned > 0 || Math.abs(netActual) > 0) {
+            // EXPENSE TABLE (Default)
+            // Net = Spending - Rebates
+            const actual = totalOut - totalIn;
+            if (planned > 0 || Math.abs(actual) > 0) {
                 expenseLinesTemp.push({
-                    category: categoryName,
-                    planned: data.planned,
-                    actual: netActual,
-                    difference: data.planned - netActual,
-                    percentage: data.planned > 0 ? (netActual / data.planned) * 100 : 0
+                    category: displayName,
+                    planned,
+                    actual,
+                    difference: planned - actual, // Under budget is positive
+                    percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         }
     });
 
-    // Sort: Largest Budget items first
+    // 5. Sort Lines
     incomeLinesTemp.sort((a, b) => b.planned - a.planned);
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
@@ -249,7 +214,6 @@ export default function BudgetVsActual() {
     }).format(amount);
   };
 
-  // Totals Calculation
   const totalIncomePlanned = incomeLines.reduce((sum, line) => sum + line.planned, 0);
   const totalIncomeActual = incomeLines.reduce((sum, line) => sum + line.actual, 0);
   const totalIncomeDifference = totalIncomeActual - totalIncomePlanned;
@@ -279,20 +243,14 @@ export default function BudgetVsActual() {
           <h1 className="text-2xl font-bold text-gray-900">Budget vs Actual Report</h1>
           <p className="text-gray-600 mt-1">Compare planned budget with actual performance</p>
         </div>
-        <button
-          onClick={handlePrint}
-          className="flex items-center gap-2 px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
-        >
-          <Download className="w-4 h-4" />
-          Print / Export
+        <button onClick={handlePrint} className="flex items-center gap-2 px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors">
+          <Download className="w-4 h-4" /> Print / Export
         </button>
       </div>
 
       <div className="bg-white rounded-lg border border-gray-200 print:hidden">
         <div className="p-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Select Fiscal Period
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Select Fiscal Period</label>
           <select
             value={selectedPeriodId}
             onChange={(e) => setSelectedPeriodId(e.target.value)}
@@ -311,9 +269,7 @@ export default function BudgetVsActual() {
       <div className="bg-white rounded-lg border border-gray-200 print:shadow-none print:border-0">
         <div className="p-8 space-y-8">
           <div className="text-center border-b border-gray-200 pb-6">
-            <h2 className="text-3xl font-bold text-[#002561] mb-2">
-              Budget vs Actual Comparison Report
-            </h2>
+            <h2 className="text-3xl font-bold text-[#002561] mb-2">Budget vs Actual Comparison Report</h2>
             <h3 className="text-xl font-semibold text-gray-700 mb-3">{currentSite?.name}</h3>
             {fiscalPeriods.find(p => p.id === selectedPeriodId) && (
               <div className="flex items-center justify-center gap-2 text-gray-600">
@@ -334,10 +290,10 @@ export default function BudgetVsActual() {
               <div>
                 <p className="text-sm text-white/70 mb-1">Opening Cash Balance</p>
                 <p className="text-2xl font-bold">{formatCurrency(openingBalance)}</p>
-                <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
+                <p className="text-xs text-white/50">Initial Accounts State</p>
               </div>
               <div>
-                <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
+                <p className="text-sm text-white/70 mb-1">Net Period Change</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
@@ -366,7 +322,7 @@ export default function BudgetVsActual() {
                   <span className="font-semibold text-blue-900">{formatCurrency(totalIncomeActual)}</span>
                 </div>
                 <div className="flex justify-between text-sm pt-1 border-t border-blue-300">
-                  <span className="text-blue-700">Difference:</span>
+                  <span className="text-blue-700">Variance:</span>
                   <span className={`font-bold ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatCurrency(totalIncomeDifference)}
                   </span>
