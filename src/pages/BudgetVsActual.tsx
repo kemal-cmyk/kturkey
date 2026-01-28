@@ -101,14 +101,14 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FIXED LOGIC: Strict Lane Policy (Income Categories vs Expense Categories)
+  // ✅ FIXED LOGIC: "One Lane Per Category" Policy
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
     
-    // 1. Define Strict Rules for Income Categories
-    // Use lowercase for case-insensitive matching
-    const INCOME_KEYWORDS = ['maintenance', 'fee', 'dues', 'aidat', 'income', 'revenue', 'interest'];
+    // 1. Define distinct rules for what constitutes an "Income Category"
+    // Any category containing these words will ALWAYS be in the Income Table.
+    const INCOME_KEYWORDS = ['maintenance', 'dues', 'aidat', 'extra fee', 'income', 'revenue', 'interest'];
 
-    // 2. Collect ALL unique categories involved
+    // 2. Identify all unique categories (Budgeted OR Used)
     const allCategories = new Set<string>();
     categories.forEach(c => allCategories.add(c.category_name));
     entries.forEach(e => {
@@ -121,11 +121,11 @@ export default function BudgetVsActual() {
     allCategories.forEach(catName => {
         const catNameLower = catName.toLowerCase();
         
-        // 3. DECIDE THE LANE: Is this fundamentally an Income category or an Expense category?
-        // Note: Even if you have an expense entry in "Maintenance Fee" (e.g. refund), it stays in the Income Lane.
+        // 3. DECIDE THE LANE
         const isIncomeCategory = INCOME_KEYWORDS.some(k => catNameLower.includes(k));
 
-        // 4. Calculate Actuals (Netting Logic within the Lane)
+        // 4. Calculate Net Actuals for this single category
+        // We sum ALL income entries and subtract ALL expense entries for this specific category name.
         const incomeSum = entries
             .filter(e => e.category === catName && e.entry_type === 'income')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -134,37 +134,36 @@ export default function BudgetVsActual() {
             .filter(e => e.category === catName && e.entry_type === 'expense')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
-        // Get Budget
+        // Get Budget Target
         const budgetItem = categories.find(c => c.category_name === catName);
         const plannedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
 
         if (isIncomeCategory) {
             // === INCOME LANE ===
-            // Actual = (Collected) - (Refunded/Expensed from this category)
+            // Actual = (Money In) - (Refunds Out)
             const netActual = incomeSum - expenseSum; 
             
-            // Only show if there is activity or a budget
             if (plannedAmount > 0 || Math.abs(netActual) > 0) {
                 incomeLinesTemp.push({
                     category: catName,
-                    planned: plannedAmount, // The "Accrual" Target
-                    actual: netActual,      // Actual Collected Net
-                    difference: netActual - plannedAmount, // Surplus/Deficit
+                    planned: plannedAmount, 
+                    actual: netActual,      
+                    difference: netActual - plannedAmount, 
                     percentage: plannedAmount > 0 ? (netActual / plannedAmount) * 100 : 0
                 });
             }
         } else {
             // === EXPENSE LANE ===
-            // Actual = (Spent) - (Rebated/Income to this category)
+            // Actual = (Money Out) - (Rebates In)
+            // Even if we "collected" money under "Elevator Repair", it is treated as a rebate (negative expense)
             const netActual = expenseSum - incomeSum; 
 
-            // Only show if there is activity or a budget
             if (plannedAmount > 0 || Math.abs(netActual) > 0) {
                 expenseLinesTemp.push({
                     category: catName,
-                    planned: plannedAmount, // The Spending Limit
-                    actual: netActual,      // Actual Spent Net
-                    difference: plannedAmount - netActual, // Remaining Budget
+                    planned: plannedAmount, 
+                    actual: netActual,      
+                    difference: plannedAmount - netActual, 
                     percentage: plannedAmount > 0 ? (netActual / plannedAmount) * 100 : 0
                 });
             }
@@ -172,7 +171,7 @@ export default function BudgetVsActual() {
     });
 
     // 5. Sort Lines
-    incomeLinesTemp.sort((a, b) => b.planned - a.planned); // Largest Budget First
+    incomeLinesTemp.sort((a, b) => b.planned - a.planned); 
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
     setIncomeLines(incomeLinesTemp);
@@ -277,7 +276,7 @@ export default function BudgetVsActual() {
                 <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
               </div>
               <div>
-                <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
+                <p className="text-sm text-white/70 mb-1">Net Period Change</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
