@@ -5,7 +5,8 @@ import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar, Wallet } from 'lucide-react';
 import { format } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
-import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '../lib/constants';
+// We remove the dependency on hardcoded lists for calculation
+// import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '../lib/constants'; 
 
 interface ReportLine {
   category: string;
@@ -74,7 +75,6 @@ export default function BudgetVsActual() {
     if (!selectedPeriodId) return;
     setLoading(true);
 
-    // Fetch Categories, Entries, AND Accounts (for Opening Balance)
     const [categoriesRes, entriesRes, accountsRes] = await Promise.all([
       supabase
         .from('budget_categories')
@@ -87,7 +87,7 @@ export default function BudgetVsActual() {
         .eq('fiscal_period_id', selectedPeriodId),
       supabase
         .from('accounts')
-        .select('initial_balance, currency_code, initial_exchange_rate') // ✅ Fetch rates
+        .select('initial_balance, currency_code, initial_exchange_rate')
         .eq('site_id', currentSite?.id)
         .eq('is_active', true)
     ]);
@@ -95,7 +95,6 @@ export default function BudgetVsActual() {
     setBudgetCategories(categoriesRes.data || []);
     setLedgerEntries(entriesRes.data || []);
 
-    // ✅ FIX: Calculate Global Opening Balance using Exchange Rates
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
         const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
         return sum + (Number(acc.initial_balance) * rate);
@@ -106,53 +105,82 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
+  // ✅ FIXED: Dynamic Category Detection (No more hardcoded lists!)
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
-    // ✅ FIX: Filter out 'Transfer' type to avoid double counting internal movements in P&L
-    const incomeEntries = entries.filter(e => e.entry_type === 'income' && e.category !== 'Transfer');
-    const expenseEntries = entries.filter(e => e.entry_type === 'expense' && e.category !== 'Transfer');
-
-    const incomeData: ReportLine[] = INCOME_CATEGORIES.map((cat) => {
-      // ✅ FIX: Use 'amount_reporting_try' to sum up TL equivalent values
-      const actual = incomeEntries
-        .filter(e => e.category === cat)
-        .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-      const budgetCat = categories.find(c => c.category_name === cat);
-      const planned = budgetCat ? Number(budgetCat.planned_amount) : 0;
-      const difference = actual - planned;
-      const percentage = planned > 0 ? (actual / planned) * 100 : 0;
-
-      return {
-        category: cat,
-        planned,
-        actual,
-        difference,
-        percentage,
-      };
+    // 1. Gather ALL unique category names from both Budget and Ledger
+    const allCategories = new Set<string>();
+    
+    // Add from Budget
+    categories.forEach(c => allCategories.add(c.category_name));
+    
+    // Add from Ledger (excluding transfers)
+    entries.forEach(e => {
+        if (e.category !== 'Transfer') {
+            allCategories.add(e.category);
+        }
     });
 
-    const expenseData: ReportLine[] = EXPENSE_CATEGORIES.map((cat) => {
-      // ✅ FIX: Use 'amount_reporting_try' here too
-      const actual = expenseEntries
-        .filter(e => e.category === cat)
-        .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+    const incomeLinesTemp: ReportLine[] = [];
+    const expenseLinesTemp: ReportLine[] = [];
 
-      const budgetCat = categories.find(c => c.category_name === cat);
-      const planned = budgetCat ? Number(budgetCat.planned_amount) : 0;
-      const difference = planned - actual;
-      const percentage = planned > 0 ? (actual / planned) * 100 : 0;
+    // 2. Iterate through EVERY category found
+    allCategories.forEach(catName => {
+        // Calculate Actuals (separating income vs expense entries for this category)
+        const incomeSum = entries
+            .filter(e => e.category === catName && e.entry_type === 'income')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
-      return {
-        category: cat,
-        planned,
-        actual,
-        difference,
-        percentage,
-      };
+        const expenseSum = entries
+            .filter(e => e.category === catName && e.entry_type === 'expense')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+
+        // Find Budgeted Amount
+        const budgetItem = categories.find(c => c.category_name === catName);
+        const plannedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
+
+        // 3. Classify: Is this an Income line or Expense line?
+        
+        // CASE A: It has Income actuals -> Add to Income Report
+        if (incomeSum > 0 || catName.includes('Dues') || catName.includes('Fees')) {
+             // Even if expenseSum exists (refunds?), we focus on the Income aspect here
+             // Note: Usually categories are distinct. If a category has BOTH, we might split it or net it.
+             // For simplicity/clarity, we put it in Income if it behaves like Income.
+             const percentage = plannedAmount > 0 ? (incomeSum / plannedAmount) * 100 : 0;
+             
+             // Only push if it's primarily an income category or has income data
+             if (incomeSum > 0 || (plannedAmount > 0 && (catName === 'Dues' || catName.includes('Income')))) {
+                 incomeLinesTemp.push({
+                    category: catName,
+                    planned: catName.includes('Dues') ? plannedAmount : 0, // Dues usually have a target, others might not
+                    actual: incomeSum,
+                    difference: incomeSum - (catName.includes('Dues') ? plannedAmount : 0),
+                    percentage
+                 });
+             }
+        }
+
+        // CASE B: It has Expense actuals OR it is a Budgeted Item -> Add to Expense Report
+        // (Most budgeted items are expenses in HOA context)
+        if (expenseSum > 0 || (plannedAmount > 0 && !catName.includes('Dues') && !catName.includes('Income'))) {
+            const difference = plannedAmount - expenseSum; // Budget - Actual (Positive is good)
+            const percentage = plannedAmount > 0 ? (expenseSum / plannedAmount) * 100 : 0;
+
+            expenseLinesTemp.push({
+                category: catName,
+                planned: plannedAmount,
+                actual: expenseSum,
+                difference,
+                percentage
+            });
+        }
     });
 
-    setIncomeLines(incomeData.filter(line => line.planned > 0 || line.actual > 0));
-    setExpenseLines(expenseData.filter(line => line.planned > 0 || line.actual > 0));
+    // 4. Sort lines (High to Low actuals usually looks best, or alphabetical)
+    incomeLinesTemp.sort((a, b) => b.actual - a.actual);
+    expenseLinesTemp.sort((a, b) => b.actual - a.actual);
+
+    setIncomeLines(incomeLinesTemp);
+    setExpenseLines(expenseLinesTemp);
   };
 
   const formatCurrency = (amount: number) => {
@@ -176,7 +204,6 @@ export default function BudgetVsActual() {
   const netActual = totalIncomeActual - totalExpenseActual;
   const netDifference = netActual - netPlanned;
 
-  // Calculate Cash Positions
   const projectedClosingActual = openingBalance + netActual;
 
   const selectedPeriod = fiscalPeriods.find(p => p.id === selectedPeriodId);
@@ -194,22 +221,12 @@ export default function BudgetVsActual() {
           <p className="text-gray-600 mb-4">
             You do not have permission to view this financial report.
           </p>
-          <div className="text-sm text-gray-500 bg-gray-50 p-3 rounded-lg">
-            Role: <span className="font-medium capitalize">{currentRole?.role.replace('_', ' ')}</span><br/>
-            Required Permission: Budget vs Actual
-          </div>
         </div>
       </div>
     );
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <Loader2 className="w-8 h-8 animate-spin text-[#002561]" />
-      </div>
-    );
-  }
+  if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 animate-spin text-[#002561]" /></div>;
 
   if (fiscalPeriods.length === 0) {
     return (
