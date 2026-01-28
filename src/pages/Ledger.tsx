@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -7,7 +7,7 @@ import {
   Receipt, Search, Filter, Download, Loader2,
   TrendingUp, TrendingDown, ChevronDown, Calendar,
   Building2, Wallet, Save, X, Trash2, Plus, Edit2, Check, Upload,
-  ArrowRightLeft, RefreshCw
+  ArrowRightLeft
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { LedgerEntry, FiscalPeriod, BudgetCategory } from '../types/database';
@@ -30,7 +30,9 @@ export default function Ledger() {
   const { currentSite, currentRole, user } = useAuth();
   const [loading, setLoading] = useState(true);
   
+  // Store ALL entries to ensure balance history is correct
   const [allEntries, setAllEntries] = useState<LedgerEntry[]>([]); 
+  
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
@@ -57,9 +59,9 @@ export default function Ledger() {
     to_account_id: '',
   });
 
-  const [isFetchingRate, setIsFetchingRate] = useState(false);
   const [unitDuesCurrency, setUnitDuesCurrency] = useState<string | null>(null);
 
+  // Helper to detect FX Transfer
   const getTransferDetails = () => {
     const fromAcc = accounts.find(a => a.id === newEntry.from_account_id);
     const toAcc = accounts.find(a => a.id === newEntry.to_account_id);
@@ -88,49 +90,6 @@ export default function Ledger() {
       fetchCategories(selectedPeriod);
     }
   }, [selectedPeriod]);
-
-  // ✅ AUTO-FETCH RATE WHEN DATE OR CURRENCY CHANGES (ADD MODE)
-  useEffect(() => {
-    const fetchRate = async () => {
-      // Only fetch if not TRY and we have a date
-      if (newEntry.currency_code === 'TRY' || !newEntry.entry_date) {
-        if (newEntry.currency_code === 'TRY' && newEntry.exchange_rate !== '1') {
-             setNewEntry(prev => ({ ...prev, exchange_rate: '1' }));
-        }
-        return;
-      }
-
-      setIsFetchingRate(true);
-      try {
-        const { data, error } = await supabase.functions.invoke('get-tcmb-rate', {
-          body: { date: newEntry.entry_date }
-        });
-
-        if (!error && data) {
-          let rate = 1;
-          if (newEntry.currency_code === 'EUR') rate = data.EUR;
-          else if (newEntry.currency_code === 'USD') rate = data.USD;
-          else if (newEntry.currency_code === 'GBP') rate = data.GBP; // Assuming API returns this
-          
-          // Only update if we got a valid rate
-          if (rate && rate > 0) {
-             setNewEntry(prev => ({ ...prev, exchange_rate: rate.toString() }));
-          }
-        }
-      } catch (err) {
-        console.error("Failed to auto-fetch rate:", err);
-      } finally {
-        setIsFetchingRate(false);
-      }
-    };
-
-    const timer = setTimeout(() => {
-        fetchRate();
-    }, 500); // Debounce slightly
-
-    return () => clearTimeout(timer);
-  }, [newEntry.currency_code, newEntry.entry_date]);
-
 
   const fetchData = async () => {
     if (!currentSite) return;
@@ -379,44 +338,19 @@ export default function Ledger() {
     setUnitDuesCurrency(null);
 
     await fetchEntries();
-    await fetchData(); 
+    await fetchData(); // Force accounts update
   };
 
   const handleUpdateEntry = async (entry: LedgerEntry, updates: Partial<LedgerEntry>) => {
     const cleanedUpdates = {
       ...updates,
       account_id: updates.account_id || null,
-      amount_reporting_try: (updates.currency_code === 'TRY' || updates.currency_code === undefined && entry.currency_code === 'TRY') 
-        ? Number(updates.amount) 
-        : Number(updates.amount) * (Number(updates.exchange_rate) || 1)
     };
 
-    const { error } = await supabase
+    await supabase
       .from('ledger_entries')
       .update(cleanedUpdates)
       .eq('id', entry.id);
-
-    if (error) {
-        console.error("Error updating ledger:", error);
-        alert("Failed to update ledger entry");
-        return;
-    }
-
-    if (entry.payment_id) {
-        const paymentUpdates: any = {
-            amount: cleanedUpdates.amount,
-            payment_date: cleanedUpdates.entry_date,
-            currency_code: cleanedUpdates.currency_code,
-            exchange_rate: cleanedUpdates.exchange_rate 
-        };
-        
-        const { error: payErr } = await supabase
-            .from('payments')
-            .update(paymentUpdates)
-            .eq('id', entry.payment_id);
-            
-        if (payErr) console.error("Warning: Could not sync payment record", payErr);
-    }
 
     setEditingRow(null);
     await fetchEntries();
@@ -428,13 +362,17 @@ export default function Ledger() {
 
     await supabase.from('ledger_entries').delete().eq('id', id);
     await fetchEntries();
-    await fetchData();
+    await fetchData(); // Force accounts update
   };
 
   const handleSaveAccount = async (accountData: Partial<Account>) => {
     if (!currentSite) return;
+
     if (editingAccount) {
-      await supabase.from('accounts').update(accountData).eq('id', editingAccount.id);
+      await supabase
+        .from('accounts')
+        .update(accountData)
+        .eq('id', editingAccount.id);
     } else {
       await supabase.from('accounts').insert({
         ...accountData,
@@ -445,13 +383,15 @@ export default function Ledger() {
         is_active: true,
       });
     }
+
     setShowAccountForm(false);
     setEditingAccount(null);
     await fetchData();
   };
 
   const handleDeleteAccount = async (id: string) => {
-    if (!confirm('Remove account?')) return;
+    if (!confirm('Are you sure you want to remove this account? This will hide the account but preserve history.')) return;
+
     await supabase.from('accounts').update({ is_active: false }).eq('id', id);
     await fetchData();
   };
@@ -683,17 +623,7 @@ export default function Ledger() {
                             </select>
                             {selectedAccount && <span className="text-xs text-gray-500">(Account: {accountCurrency})</span>}
                             {needsExchangeRate && (
-                              <>
-                                <label className={`text-sm font-medium ml-2 ${hasCurrencyMismatch ? 'text-orange-600' : 'text-gray-600'}`}>Rate {hasCurrencyMismatch ? '(Required)' : ''}:</label>
-                                <div className="relative">
-                                  <input type="number" step="0.0001" value={newEntry.exchange_rate} onChange={(e) => setNewEntry({ ...newEntry, exchange_rate: e.target.value })} placeholder="Exchange rate" className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${hasCurrencyMismatch ? 'border-orange-400 bg-orange-50 focus:ring-orange-500' : 'border-amber-400 bg-amber-50 focus:ring-amber-500'}`} />
-                                  {isFetchingRate && (
-                                    <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                                      <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
-                                    </div>
-                                  )}
-                                </div>
-                              </>
+                              <><label className={`text-sm font-medium ml-2 ${hasCurrencyMismatch ? 'text-orange-600' : 'text-gray-600'}`}>Rate {hasCurrencyMismatch ? '(Required)' : ''}:</label><input type="number" step="0.0001" value={newEntry.exchange_rate} onChange={(e) => setNewEntry({ ...newEntry, exchange_rate: e.target.value })} placeholder="Exchange rate" className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${hasCurrencyMismatch ? 'border-orange-400 bg-orange-50 focus:ring-orange-500' : 'border-amber-400 bg-amber-50 focus:ring-amber-500'}`} /></>
                             )}
                           </div>
                         )}
@@ -843,66 +773,11 @@ function EntryRow({
     category: entry.category,
     description: entry.description || '',
     amount: entry.amount,
-    currency_code: entry.currency_code,
-    exchange_rate: entry.exchange_rate || 1,
     unit_id: '',
   });
 
-  // ✅ Auto-Fetch Rate for Edit Mode too
-  const [isFetchingRate, setIsFetchingRate] = useState(false);
-
-  useEffect(() => {
-    if (!isEditing) return; // Only fetch if we are editing
-
-    const fetchRate = async () => {
-      if (editData.currency_code === 'TRY' || !editData.entry_date) {
-         if (editData.currency_code === 'TRY' && editData.exchange_rate !== 1) {
-             setEditData(prev => ({ ...prev, exchange_rate: 1 }));
-         }
-         return;
-      }
-
-      setIsFetchingRate(true);
-      try {
-        const { data, error } = await supabase.functions.invoke('get-tcmb-rate', {
-          body: { date: editData.entry_date }
-        });
-
-        if (!error && data) {
-          let rate = 1;
-          if (editData.currency_code === 'EUR') rate = data.EUR;
-          else if (editData.currency_code === 'USD') rate = data.USD;
-          else if (editData.currency_code === 'GBP') rate = data.GBP;
-          
-          if (rate && rate > 0) {
-             setEditData(prev => ({ ...prev, exchange_rate: rate }));
-          }
-        }
-      } catch (err) {
-        console.error("Failed to auto-fetch rate (Edit Mode):", err);
-      } finally {
-        setIsFetchingRate(false);
-      }
-    };
-
-    const timer = setTimeout(() => {
-        fetchRate();
-    }, 500);
-
-    return () => clearTimeout(timer);
-  }, [editData.currency_code, editData.entry_date, isEditing]);
-
-
   const account = accounts.find(a => a.id === entry.account_id);
   const isMaintenanceRelated = editData.category === 'Maintenance Fees' || editData.category === 'Extra Fees';
-
-  const SUPPORTED_CURRENCIES = [
-    { code: 'TRY', symbol: '₺' },
-    { code: 'USD', symbol: '$' },
-    { code: 'EUR', symbol: '€' },
-    { code: 'GBP', symbol: '£' },
-    { code: 'RUB', symbol: '₽' },
-  ];
 
   if (isEditing) {
     return (
@@ -910,49 +785,13 @@ function EntryRow({
         <tr className="bg-yellow-50">
           <td className="px-4 py-2"><input type="date" value={editData.entry_date} onChange={(e) => setEditData({ ...editData, entry_date: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"/></td>
           <td className="px-4 py-2"><select value={editData.account_id} onChange={(e) => setEditData({ ...editData, account_id: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"><option value="">Select</option>{accounts.map(acc => (<option key={acc.id} value={acc.id}>{acc.account_name}</option>))}</select></td>
-          <td className="px-4 py-2"><select value={editData.category || ''} onChange={(e) => setEditData({ ...editData, category: e.target.value, unit_id: '' })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white">{categories.map(cat => (<option key={cat.id} value={cat.category_name}>{cat.category_name}</option>))}<option value="Other">Other</option></select></td>
+          <td className="px-4 py-2"><select value={editData.category} onChange={(e) => setEditData({ ...editData, category: e.target.value, unit_id: '' })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white">{categories.map(cat => (<option key={cat.id} value={cat.category_name}>{cat.category_name}</option>))}<option value="Other">Other</option></select></td>
           <td className="px-4 py-2"><input type="text" value={editData.description} onChange={(e) => setEditData({ ...editData, description: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white" /></td>
-          
-          {/* Amount and Currency/Rate Inputs */}
-          <td className="px-4 py-2" colSpan={2}>
-             <div className="flex items-center gap-1">
-                <input type="number" value={editData.amount} onChange={(e) => setEditData({ ...editData, amount: Number(e.target.value) })} className={`w-24 px-2 py-1.5 text-sm border rounded focus:ring-2 text-right ${editData.entry_type === 'expense' ? 'border-red-200 text-red-600' : 'border-green-200 text-green-600'}`} />
-                <select value={editData.currency_code} onChange={(e) => setEditData({ ...editData, currency_code: e.target.value })} className="w-16 px-1 py-1.5 text-xs border rounded bg-white">
-                    {SUPPORTED_CURRENCIES.map(c => <option key={c.code} value={c.code}>{c.code}</option>)}
-                </select>
-                {editData.currency_code !== 'TRY' && (
-                    <div className="relative">
-                        <input type="number" step="0.0001" value={editData.exchange_rate} onChange={(e) => setEditData({ ...editData, exchange_rate: Number(e.target.value) })} className="w-16 px-1 py-1.5 text-xs border border-orange-300 rounded bg-orange-50 text-right" placeholder="Rate"/>
-                        {isFetchingRate && (
-                            <div className="absolute right-1 top-1/2 -translate-y-1/2">
-                                <Loader2 className="w-3 h-3 text-gray-400 animate-spin" />
-                            </div>
-                        )}
-                    </div>
-                )}
-             </div>
-          </td>
-
+          <td className="px-4 py-2"><input type="number" value={editData.entry_type === 'expense' ? editData.amount : ''} onChange={(e) => setEditData({ ...editData, amount: Number(e.target.value), entry_type: 'expense' })} placeholder="0" className="w-full px-2 py-1.5 text-sm border border-red-200 rounded focus:ring-2 focus:ring-red-400 bg-red-50/50 text-right text-red-600" /></td>
+          <td className="px-4 py-2"><input type="number" value={editData.entry_type === 'income' ? editData.amount : ''} onChange={(e) => setEditData({ ...editData, amount: Number(e.target.value), entry_type: 'income' })} placeholder="0" className="w-full px-2 py-1.5 text-sm border border-green-200 rounded focus:ring-2 focus:ring-green-400 bg-green-50/50 text-right text-green-600" /></td>
           <td className="px-4 py-2 text-right text-sm text-gray-400">-</td>
           <td className="px-4 py-2 text-right text-sm text-gray-400">-</td>
-          <td className="px-4 py-2"><div className="flex justify-center gap-1"><button onClick={() => { 
-              let finalDescription = editData.description; 
-              if (isMaintenanceRelated && editData.unit_id) { 
-                  const unit = units.find(u => u.id === editData.unit_id); 
-                  const unitLabel = unit ? `Unit ${unit.block ? `${unit.block}-` : ''}${unit.unit_number}` : ''; 
-                  finalDescription = finalDescription ? `${unitLabel} - ${finalDescription}` : unitLabel; 
-              } 
-              onSave({ 
-                  entry_date: editData.entry_date, 
-                  entry_type: editData.entry_type, 
-                  account_id: editData.account_id, 
-                  category: editData.category, 
-                  description: finalDescription, 
-                  amount: editData.amount,
-                  currency_code: editData.currency_code,
-                  exchange_rate: editData.exchange_rate
-              }); 
-          }} className="p-1.5 bg-green-500 text-white rounded hover:bg-green-600" title="Save"><Check className="w-4 h-4" /></button><button onClick={onCancel} className="p-1.5 bg-gray-400 text-white rounded hover:bg-gray-500" title="Cancel"><X className="w-4 h-4" /></button></div></td>
+          <td className="px-4 py-2"><div className="flex justify-center gap-1"><button onClick={() => { let finalDescription = editData.description; if (isMaintenanceRelated && editData.unit_id) { const unit = units.find(u => u.id === editData.unit_id); const unitLabel = unit ? `Unit ${unit.block ? `${unit.block}-` : ''}${unit.unit_number}` : ''; finalDescription = finalDescription ? `${unitLabel} - ${finalDescription}` : unitLabel; } onSave({ entry_date: editData.entry_date, entry_type: editData.entry_type, account_id: editData.account_id, category: editData.category, description: finalDescription, amount: editData.amount }); }} className="p-1.5 bg-green-500 text-white rounded hover:bg-green-600" title="Save"><Check className="w-4 h-4" /></button><button onClick={onCancel} className="p-1.5 bg-gray-400 text-white rounded hover:bg-gray-500" title="Cancel"><X className="w-4 h-4" /></button></div></td>
         </tr>
         {isMaintenanceRelated && (
           <tr className="bg-yellow-50/50">
