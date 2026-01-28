@@ -321,8 +321,9 @@ export default function Units() {
                                   const openingBalance = unit?.balance?.opening_balance || 0;
                                   const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
 
-                                  // Use the paid_amount from dues table - it has the correct converted amounts
-                                  const totalPaid = unitDetails.dues.reduce((sum, due) => sum + Number(due.paid_amount), 0);
+                                  // ✅ FIX: Calculate Total Paid from ACTUAL PAYMENTS list, not from stale dues table
+                                  const totalPaid = unitDetails.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+                                  
                                   const duesCurrency = unitDetails.dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
                                   const displayCurrency = duesCurrency;
 
@@ -415,7 +416,7 @@ export default function Units() {
                                       </span>
                                       {unitDetails.dues.length > 0 && (
                                         <span className="text-xs text-gray-500 font-normal">
-                                          {unitDetails.dues.filter(d => d.status !== 'paid').length} unpaid
+                                          {unitDetails.dues.length} records
                                         </span>
                                       )}
                                     </h4>
@@ -426,49 +427,19 @@ export default function Units() {
                                         unitDetails.dues.map((due) => (
                                           <div
                                             key={due.id}
-                                            className={`p-3 rounded-lg border ${
-                                              due.status === 'paid'
-                                                ? 'bg-green-50 border-green-200'
-                                                : due.status === 'overdue'
-                                                ? 'bg-red-50 border-red-200'
-                                                : due.status === 'partial'
-                                                ? 'bg-amber-50 border-amber-200'
-                                                : 'bg-white border-gray-200'
-                                            }`}
+                                            className={`p-3 rounded-lg border bg-white border-gray-200`}
                                           >
                                             <div className="flex justify-between items-start mb-2">
                                               <span className="text-sm font-semibold text-gray-900">
                                                 {format(new Date(due.month_date), 'MMMM yyyy')}
                                               </span>
-                                              <span className={`text-xs px-2 py-0.5 rounded-full capitalize ${
-                                                due.status === 'paid'
-                                                  ? 'bg-green-100 text-green-700'
-                                                  : due.status === 'overdue'
-                                                  ? 'bg-red-100 text-red-700'
-                                                  : due.status === 'partial'
-                                                  ? 'bg-amber-100 text-amber-700'
-                                                  : 'bg-gray-100 text-gray-700'
-                                              }`}>
-                                                {due.status}
-                                              </span>
+                                              {/* Status removed from here as it might be stale */}
                                             </div>
                                             <div className="space-y-1">
                                               <div className="flex justify-between items-center text-sm">
                                                 <span className="text-gray-600">Total:</span>
                                                 <span className="font-medium text-gray-900">{formatCurrency(Number(due.total_amount), due.currency_code)}</span>
                                               </div>
-                                              {due.paid_amount > 0 && (
-                                                <div className="flex justify-between items-center text-sm">
-                                                  <span className="text-gray-600">Paid:</span>
-                                                  <span className="font-medium text-green-600">{formatCurrency(Number(due.paid_amount), due.currency_code)}</span>
-                                                </div>
-                                              )}
-                                              {due.status === 'partial' && (
-                                                <div className="flex justify-between items-center text-sm">
-                                                  <span className="text-gray-600">Remaining:</span>
-                                                  <span className="font-medium text-red-600">{formatCurrency(Number(due.total_amount) - Number(due.paid_amount), due.currency_code)}</span>
-                                                </div>
-                                              )}
                                             </div>
                                           </div>
                                         ))
