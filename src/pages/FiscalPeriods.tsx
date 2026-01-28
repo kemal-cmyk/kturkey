@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
-import { EXPENSE_CATEGORIES } from '../lib/constants';
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../lib/constants';
 
 interface Account {
   id: string;
@@ -15,6 +15,64 @@ interface Account {
   account_type: 'bank' | 'cash';
   currency_code: string;
 }
+
+// Interface definitions for sub-components
+interface CreatePeriodModalProps {
+  siteId: string;
+  onClose: () => void;
+  onCreated: () => void;
+}
+
+interface RolloverModalProps {
+  period: FiscalPeriod;
+  siteId: string;
+  onClose: () => void;
+  onCompleted: () => void;
+}
+
+interface AddCategoryModalProps {
+  periodId: string;
+  existingCategories: BudgetCategory[];
+  onClose: () => void;
+  onAdded: () => void;
+}
+
+interface EditCategoryModalProps {
+  category: BudgetCategory;
+  onClose: () => void;
+  onUpdated: () => void;
+}
+
+interface AddEntryModalProps {
+  category: BudgetCategory;
+  period: FiscalPeriod;
+  siteId: string;
+  userId: string;
+  accounts: Account[];
+  onClose: () => void;
+  onAdded: () => void;
+}
+
+interface SetDuesModalProps {
+  periodId: string;
+  siteId: string;
+  defaultCurrency: string;
+  onClose: () => void;
+  onSet: () => void;
+}
+
+interface Unit {
+  id: string;
+  unit_number: string;
+  owner_name: string | null;
+}
+
+const CURRENCIES = [
+  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
+  { code: 'EUR', symbol: '€', name: 'Euro' },
+  { code: 'USD', symbol: '$', name: 'US Dollar' },
+  { code: 'GBP', symbol: '£', name: 'British Pound' },
+];
 
 export default function FiscalPeriods() {
   const { currentSite, currentRole, user } = useAuth();
@@ -87,20 +145,16 @@ export default function FiscalPeriods() {
     fetchPeriodDetails(period.id);
   };
 
-  // ✅ Triggered when regenerating dues to refresh totals
   const activatePeriod = async (periodId: string) => {
     setActionLoading(true);
 
-    // 1. Generate the dues entries in the database
     await supabase.rpc('generate_fiscal_period_dues', {
       p_fiscal_period_id: periodId,
     });
 
-    // 2. Refresh data to show new totals immediately
     await fetchPeriodDetails(periodId);
     await fetchPeriods();
     
-    // 3. Ensure selected period object is up to date
     if (selectedPeriod?.id === periodId) {
       const { data } = await supabase
         .from('fiscal_periods')
@@ -120,6 +174,37 @@ export default function FiscalPeriods() {
     }).format(amount);
   };
 
+  // ✅ HELPER: Clean strings for matching (Matches BudgetVsActual Logic)
+  const cleanString = (str: string) => {
+      return str.toLowerCase()
+          .replace('communual', 'communal') // Fix typo
+          .replace(/payments?|payment/g, '') // Remove 'payment' words
+          // KEEP 'fee' because 'Maintenance Fee' needs it
+          .trim();
+  };
+
+  // ✅ HELPER: Determine Income vs Expense (Matches BudgetVsActual Logic)
+  const checkIsIncome = (name: string) => {
+      const lower = name.toLowerCase().trim();
+      const cleanName = cleanString(name);
+
+      // A. Check against OFFICIAL Income List
+      const isOfficialIncome = INCOME_CATEGORIES.some(cat => {
+          const cleanCat = cleanString(cat);
+          return lower === cat.toLowerCase() || cleanName === cleanCat || lower.includes(cleanCat);
+      });
+      if (isOfficialIncome) return true;
+
+      // B. Fallback Keywords
+      const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
+      if (incomeKeywords.some(k => lower.includes(k))) return true;
+
+      // C. Special Logic for "Fee"
+      if (lower.includes('maintenance') && lower.includes('fee')) return true;
+
+      return false; // Defaults to Expense
+  };
+
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center min-h-[60vh]">
@@ -137,7 +222,7 @@ export default function FiscalPeriods() {
         </div>
         {isAdmin && (
           <button
-            type="button" // ✅ Explicit button type
+            type="button"
             onClick={() => setShowCreateModal(true)}
             className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
           >
@@ -169,7 +254,7 @@ export default function FiscalPeriods() {
               {periods.map((period) => (
                 <button
                   key={period.id}
-                  type="button" // ✅ Explicit button type
+                  type="button"
                   onClick={() => handleSelectPeriod(period)}
                   className={`w-full p-4 rounded-xl border text-left transition-colors ${
                     selectedPeriod?.id === period.id
@@ -239,12 +324,38 @@ export default function FiscalPeriods() {
                       </button>
                     )}
                   </div>
+                  
                   {budgetCategories.length > 0 ? (
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
+                        
+                        // ✅ FIX APPLIED HERE: Smart Logic to calculate Actuals
+                        const catNameClean = cleanString(cat.category_name);
+                        const isIncome = checkIsIncome(cat.category_name);
+
+                        // Find matching entries (ignoring typos and noise words)
                         const categoryActual = ledgerEntries
-                            .filter(e => e.category === cat.category_name)
-                            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+                            .filter(e => {
+                                if (e.category === 'Transfer') return false;
+                                const entryClean = cleanString(e.category);
+                                // Smart Match: Exact, Substring, or Reverse Substring
+                                return entryClean === catNameClean || 
+                                       entryClean.includes(catNameClean) || 
+                                       catNameClean.includes(entryClean);
+                            })
+                            .reduce((sum, e) => {
+                                const val = Number(e.amount_reporting_try || e.amount);
+                                // If this is an INCOME Category (e.g. Dues):
+                                // We want "Collections". Income adds (+), Refunds subtract (-).
+                                if (isIncome) {
+                                    return sum + (e.entry_type === 'income' ? val : -val);
+                                }
+                                // If this is an EXPENSE Category (e.g. Electric):
+                                // We want "Spending". Expenses add (+), Rebates subtract (-).
+                                else {
+                                    return sum + (e.entry_type === 'expense' ? val : -val);
+                                }
+                            }, 0);
 
                         const utilization = cat.planned_amount > 0
                           ? (categoryActual / cat.planned_amount) * 100
@@ -309,7 +420,7 @@ export default function FiscalPeriods() {
                               />
                             </div>
                             <p className="text-xs text-gray-500 mt-1">
-                              {utilization.toFixed(1)}% utilized
+                              {utilization.toFixed(1)}% {isIncome ? 'collected' : 'utilized'}
                             </p>
                           </div>
                         );
@@ -465,7 +576,6 @@ export default function FiscalPeriods() {
           siteId={currentSite.id}
           defaultCurrency={currentSite.default_currency || 'TRY'}
           onClose={() => setShowSetDuesModal(false)}
-          // ✅ FIX: Reload period data after setting dues to show new entries
           onSet={() => {
             setShowSetDuesModal(false);
             activatePeriod(selectedPeriod.id); 
@@ -476,6 +586,10 @@ export default function FiscalPeriods() {
   );
 }
 
+// ... (KEEP SUB-COMPONENTS: StatusBadge, CreatePeriodModal, RolloverModal, AddCategoryModal, EditCategoryModal, AddEntryModal, SetDuesModal AS IS)
+// Important: Ensure you copy the sub-components from your previous file to the bottom of this one. 
+// They are required for the code to run but were unchanged in this logic fix.
+// (I omitted them here for brevity, but they must be present in your final file).
 // ... SUB COMPONENTS ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
