@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'; // Added React import
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
@@ -88,13 +88,19 @@ export default function MonthlyIncomeExpenses() {
       }).slice(0, 12);
       setMonths(monthsInPeriod);
 
+      // ✅ FIX: Fetch rates to calculate proper opening balance
       const { data: accounts } = await supabase
         .from('accounts')
-        .select('initial_balance')
+        .select('initial_balance, currency_code, initial_exchange_rate')
         .eq('site_id', currentSite.id)
         .eq('is_active', true);
 
-      const totalInitialBalance = accounts?.reduce((sum, acc) => sum + (acc.initial_balance || 0), 0) || 0;
+      // ✅ FIX: Calculate Total Opening Balance in TL
+      const totalInitialBalance = accounts?.reduce((sum, acc) => {
+          const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
+          return sum + (Number(acc.initial_balance) * rate);
+      }, 0) || 0;
+      
       setOpeningBalance(totalInitialBalance);
 
       const { data: ledgerEntries } = await supabase
@@ -103,6 +109,7 @@ export default function MonthlyIncomeExpenses() {
         .eq('site_id', currentSite.id)
         .gte('entry_date', selectedPeriod.start_date)
         .lte('entry_date', selectedPeriod.end_date)
+        .neq('category', 'Transfer') // ✅ FILTER OUT TRANSFERS
         .order('entry_date', { ascending: true });
 
       const incomeCategoryMap = new Map<string, { values: number[], transactions: TransactionDetail[] }>();
@@ -125,9 +132,9 @@ export default function MonthlyIncomeExpenses() {
 
           if (monthIndex === -1) return;
 
+          // ✅ FIX: Use 'amount_reporting_try' for correct currency summing
           const amountInTRY = Number(entry.amount_reporting_try || entry.amount || 0);
 
-          // Use the map we created, or create new entry if category not in constant list
           const targetMap = entry.entry_type === 'income' ? incomeCategoryMap : expenseCategoryMap;
           
           if (!targetMap.has(entry.category)) {
@@ -148,7 +155,7 @@ export default function MonthlyIncomeExpenses() {
         });
       }
 
-      // --- FILTERING LOGIC (Fixed) ---
+      // --- FILTERING LOGIC ---
       const processMap = (map: Map<string, any>) => {
         return Array.from(map.entries())
           .map(([category, data]) => ({
