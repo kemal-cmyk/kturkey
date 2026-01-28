@@ -11,7 +11,7 @@ import {
   PieChart as RechartsPie, Pie, Cell, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts';
-import type { FiscalPeriod, BudgetCategory } from '../types/database';
+import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../lib/constants';
 
 interface Account {
@@ -25,11 +25,11 @@ export default function Budget() {
   const [loading, setLoading] = useState(true);
   const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [editingCategory, setEditingCategory] = useState<BudgetCategory | null>(null);
   const [addingExpense, setAddingExpense] = useState<BudgetCategory | null>(null);
-  const [actualIncomeFromLedger, setActualIncomeFromLedger] = useState<Record<string, number>>({});
 
   const isAdmin = currentRole?.role === 'admin';
 
@@ -61,18 +61,14 @@ export default function Budget() {
 
       setBudgetCategories(categories || []);
 
+      // ✅ FIX: Fetch ALL ledger entries for this period to calculate smart actuals
       const { data: ledgerData } = await supabase
         .from('ledger_entries')
-        .select('category, amount')
+        .select('*')
         .eq('site_id', currentSite.id)
-        .eq('fiscal_period_id', period.id)
-        .eq('entry_type', 'income');
+        .eq('fiscal_period_id', period.id);
 
-      const incomeByCategory: Record<string, number> = {};
-      ledgerData?.forEach(entry => {
-        incomeByCategory[entry.category] = (incomeByCategory[entry.category] || 0) + Number(entry.amount);
-      });
-      setActualIncomeFromLedger(incomeByCategory);
+      setLedgerEntries(ledgerData || []);
     }
 
     const { data: accountsData } = await supabase
@@ -85,6 +81,45 @@ export default function Budget() {
     setLoading(false);
   };
 
+  // ✅ HELPER: Clean strings for matching (Consistent with other pages)
+  const normalizeCategory = (str: string) => {
+    return str.toLowerCase()
+      .replace('communual', 'communal') // Fix common typo
+      .replace(/payments?|payment/g, '') // Remove 'payment' words
+      // KEEP 'fee' because 'Maintenance Fee' needs it
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
+
+  // ✅ HELPER: Determine Income vs Expense
+  const checkIsIncome = (name: string) => {
+    const lower = name.toLowerCase().trim();
+    const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
+    if (incomeKeywords.some(k => lower.includes(k))) return true;
+    if (lower.includes('maintenance') && lower.includes('fee')) return true;
+    return false;
+  };
+
+  // ✅ HELPER: Calculate Actuals using Smart Matching
+  const getSmartActual = (budgetCatName: string) => {
+    const normBudget = normalizeCategory(budgetCatName);
+    const isIncome = checkIsIncome(budgetCatName);
+
+    return ledgerEntries
+      .filter(e => {
+        if (e.category === 'Transfer') return false;
+        const normEntry = normalizeCategory(e.category);
+        return normEntry === normBudget || normEntry.includes(normBudget) || normBudget.includes(normEntry);
+      })
+      .reduce((sum, e) => {
+        const val = Number(e.amount_reporting_try || e.amount);
+        // For Income: Add Income (+), Subtract Expense/Refunds (-)
+        if (isIncome) return sum + (e.entry_type === 'income' ? val : -val);
+        // For Expense: Add Expense (+), Subtract Income/Rebates (-)
+        return sum + (e.entry_type === 'expense' ? val : -val);
+      }, 0);
+  };
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
@@ -93,21 +128,16 @@ export default function Budget() {
     }).format(amount);
   };
 
-  const incomeCategories = budgetCategories.filter(cat =>
-    INCOME_CATEGORIES.includes(cat.category_name as typeof INCOME_CATEGORIES[number])
-  );
-  const expenseCategories = budgetCategories.filter(cat =>
-    !INCOME_CATEGORIES.includes(cat.category_name as typeof INCOME_CATEGORIES[number])
-  );
+  // Filter Categories based on Smart Logic
+  const incomeCategories = budgetCategories.filter(cat => checkIsIncome(cat.category_name));
+  const expenseCategories = budgetCategories.filter(cat => !checkIsIncome(cat.category_name));
 
+  // Calculate Totals using Smart Actuals
   const totalPlannedIncome = incomeCategories.reduce((sum, cat) => sum + Number(cat.planned_amount), 0);
-  const totalActualIncome = incomeCategories.reduce((sum, cat) => {
-    const actualFromLedger = actualIncomeFromLedger[cat.category_name] || 0;
-    return sum + actualFromLedger;
-  }, 0);
+  const totalActualIncome = incomeCategories.reduce((sum, cat) => sum + getSmartActual(cat.category_name), 0);
 
   const totalPlannedExpense = expenseCategories.reduce((sum, cat) => sum + Number(cat.planned_amount), 0);
-  const totalActualExpense = expenseCategories.reduce((sum, cat) => sum + Number(cat.actual_amount), 0);
+  const totalActualExpense = expenseCategories.reduce((sum, cat) => sum + getSmartActual(cat.category_name), 0);
 
   const totalRemaining = totalPlannedExpense - totalActualExpense;
   const overallUtilization = totalPlannedExpense > 0 ? (totalActualExpense / totalPlannedExpense) * 100 : 0;
@@ -117,7 +147,7 @@ export default function Budget() {
   const pieData = expenseCategories
     .map((cat, idx) => ({
       name: cat.category_name,
-      value: Number(cat.actual_amount),
+      value: getSmartActual(cat.category_name),
       color: COLORS[idx % COLORS.length],
     }))
     .filter(d => d.value > 0);
@@ -126,7 +156,7 @@ export default function Budget() {
     name: cat.category_name.length > 12 ? cat.category_name.slice(0, 12) + '...' : cat.category_name,
     fullName: cat.category_name,
     planned: Number(cat.planned_amount),
-    spent: Number(cat.actual_amount),
+    spent: getSmartActual(cat.category_name),
     color: COLORS[idx % COLORS.length],
   }));
 
@@ -268,8 +298,9 @@ export default function Budget() {
           ) : (
             <div className="divide-y divide-gray-100">
               {budgetCategories.map((cat, idx) => {
+                const actual = getSmartActual(cat.category_name);
                 const utilization = cat.planned_amount > 0
-                  ? (cat.actual_amount / cat.planned_amount) * 100
+                  ? (actual / cat.planned_amount) * 100
                   : 0;
                 const isOverBudget = utilization > 100;
                 const isWarning = utilization > 80 && utilization <= 100;
@@ -287,7 +318,7 @@ export default function Budget() {
                       <div className="flex items-center space-x-3">
                         <div className="text-right">
                           <p className="text-sm font-medium text-gray-900">
-                            {formatCurrency(cat.actual_amount)} / {formatCurrency(cat.planned_amount)}
+                            {formatCurrency(actual)} / {formatCurrency(cat.planned_amount)}
                           </p>
                           <p className={`text-xs ${isOverBudget ? 'text-red-600' : isWarning ? 'text-amber-600' : 'text-gray-500'}`}>
                             {utilization.toFixed(1)}% used
@@ -324,7 +355,7 @@ export default function Budget() {
                     {isOverBudget && (
                       <div className="flex items-center mt-2 text-xs text-red-600">
                         <AlertTriangle className="w-3 h-3 mr-1" />
-                        Over budget by {formatCurrency(cat.actual_amount - cat.planned_amount)}
+                        Over budget by {formatCurrency(actual - cat.planned_amount)}
                       </div>
                     )}
                   </div>
@@ -379,8 +410,9 @@ export default function Budget() {
           )}
 
           {expenseCategories.filter(c => {
-            const util = c.planned_amount > 0 ? (c.actual_amount / c.planned_amount) * 100 : 0;
-            return util > 80;
+             const actual = getSmartActual(c.category_name);
+             const util = c.planned_amount > 0 ? (actual / c.planned_amount) * 100 : 0;
+             return util > 80;
           }).length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
               <div className="flex items-start space-x-3">
@@ -389,10 +421,12 @@ export default function Budget() {
                   <h4 className="font-medium text-amber-900">Expense Budget Alerts</h4>
                   <ul className="mt-2 space-y-1 text-sm text-amber-700">
                     {expenseCategories.filter(c => {
-                      const util = c.planned_amount > 0 ? (c.actual_amount / c.planned_amount) * 100 : 0;
-                      return util > 80;
+                       const actual = getSmartActual(c.category_name);
+                       const util = c.planned_amount > 0 ? (actual / c.planned_amount) * 100 : 0;
+                       return util > 80;
                     }).map(cat => {
-                      const util = cat.planned_amount > 0 ? (cat.actual_amount / cat.planned_amount) * 100 : 0;
+                      const actual = getSmartActual(cat.category_name);
+                      const util = cat.planned_amount > 0 ? (actual / cat.planned_amount) * 100 : 0;
                       return (
                         <li key={cat.id}>
                           {cat.category_name}: {util.toFixed(0)}% used
@@ -477,6 +511,9 @@ export default function Budget() {
     </div>
   );
 }
+
+// ... SUB-COMPONENTS ...
+// (These are unchanged, but included for completeness so you can copy the whole file safely)
 
 interface BudgetWizardProps {
   periodId: string;
