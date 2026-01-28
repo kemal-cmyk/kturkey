@@ -8,9 +8,9 @@ import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/databas
 
 interface ReportLine {
   category: string;
-  planned: number; // Budget
-  actual: number;  // Realized
-  difference: number; // Variance
+  planned: number;
+  actual: number;
+  difference: number;
   percentage: number;
 }
 
@@ -19,8 +19,11 @@ export default function BudgetVsActual() {
   const { canAccess } = usePermissions();
 
   const [loading, setLoading] = useState(true);
+  const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('');
+  const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -55,6 +58,7 @@ export default function BudgetVsActual() {
 
     const active = periods?.find(p => p.status === 'active');
     if (active) {
+      setActivePeriod(active);
       setSelectedPeriodId(active.id);
     } else if (periods && periods.length > 0) {
       setSelectedPeriodId(periods[0].id);
@@ -84,10 +88,12 @@ export default function BudgetVsActual() {
         .eq('is_active', true)
     ]);
 
-    // Calculate Opening Balance
+    setBudgetCategories(categoriesRes.data || []);
+    setLedgerEntries(entriesRes.data || []);
+
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
-      const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
-      return sum + (Number(acc.initial_balance) * rate);
+        const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
+        return sum + (Number(acc.initial_balance) * rate);
     }, 0);
     setOpeningBalance(totalOpening);
 
@@ -95,14 +101,23 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ CORE LOGIC: Strict Category Separation
+  // ✅ FIXED LOGIC: Strict "Whitelist" Strategy
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
     
-    // 1. Define strict keywords for Income Categories
-    // If a category has these words, it goes to Income Table. Everything else goes to Expense Table.
-    const INCOME_KEYWORDS = ['maintenance', 'dues', 'aidat', 'extra fee', 'income', 'revenue', 'interest'];
+    // 1. The "Golden List" of Income Categories
+    // Only EXACT matches or known variations go to Income. Everything else is Expense.
+    const INCOME_WHITELIST = [
+        'maintenance fee', 
+        'maintenance fees', 
+        'dues', 
+        'aidat', 
+        'extra fees', 
+        'pool income',
+        'interest income',
+        'other income'
+    ];
 
-    // 2. Normalize and Collect all unique Categories
+    // 2. Normalize and Collect all unique Categories from Budget and Ledger
     const allCategoryNames = new Set<string>();
     categories.forEach(c => allCategoryNames.add(c.category_name));
     entries.forEach(e => {
@@ -112,75 +127,76 @@ export default function BudgetVsActual() {
     const incomeLinesTemp: ReportLine[] = [];
     const expenseLinesTemp: ReportLine[] = [];
 
-    // Helper to sum ledger entries safely
-    const getSum = (catName: string, type: 'income' | 'expense') => {
-        return entries
-            .filter(e => 
-                e.category.trim().toLowerCase() === catName.trim().toLowerCase() && 
-                e.entry_type === type
-            )
+    // Helpers for case-insensitive matching
+    const normalize = (str: string) => str.trim().toLowerCase();
+    
+    const getBudget = (name: string) => categories.find(c => normalize(c.category_name) === normalize(name));
+    
+    const getActuals = (name: string) => {
+        const relevantEntries = entries.filter(e => normalize(e.category) === normalize(name) && e.category !== 'Transfer');
+        // Net Calculation: (Total Income Entries) - (Total Expense Entries for this category)
+        // For Income Categories: This is (Collections - Refunds)
+        // For Expense Categories: This is (Rebates - Spending) -> We flip signs later
+        const inc = relevantEntries
+            .filter(e => e.entry_type === 'income')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+        const exp = relevantEntries
+            .filter(e => e.entry_type === 'expense')
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+        return { inc, exp };
     };
 
-    // Helper to find budget safely
-    const getBudget = (catName: string) => {
-        return categories.find(c => c.category_name.trim().toLowerCase() === catName.trim().toLowerCase());
-    };
-
-    // 3. Process Each Category
+    // 3. Iterate and Classify
     Array.from(allCategoryNames).forEach(catName => {
-        const catNameLower = catName.toLowerCase();
+        const catLower = normalize(catName);
         
-        // Prevent duplicates (e.g. "Electric" vs "electric")
-        // We skip if we already processed this name in a case-insensitive way
-        const alreadyAdded = [...incomeLinesTemp, ...expenseLinesTemp].some(l => l.category.toLowerCase() === catNameLower);
-        if (alreadyAdded) return;
+        // Prevent duplicate processing (e.g. "Electric" and "electric")
+        const alreadyProcessed = [...incomeLinesTemp, ...expenseLinesTemp].some(l => normalize(l.category) === catLower);
+        if (alreadyProcessed) return;
 
-        // Is this an Income Category?
-        const isIncomeCategory = INCOME_KEYWORDS.some(k => catNameLower.includes(k));
+        // --- THE DECISION ---
+        // Is it strictly an Income Category?
+        const isIncome = INCOME_WHITELIST.includes(catLower);
 
         // Get Data
-        const incomeSum = getSum(catName, 'income');
-        const expenseSum = getSum(catName, 'expense');
         const budgetItem = getBudget(catName);
-        const plannedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
+        const planned = budgetItem ? Number(budgetItem.planned_amount) : 0;
+        const { inc, exp } = getActuals(catName);
         
-        // Use the cleanest name available
+        // Use the prettiest name available
         const displayName = budgetItem ? budgetItem.category_name : catName;
 
-        if (isIncomeCategory) {
+        if (isIncome) {
             // === INCOME LANE ===
-            // Actual = (Money In) - (Money Out/Refunds)
-            const netActual = incomeSum - expenseSum; 
+            const actual = inc - exp; // Net Collections
             
-            if (plannedAmount > 0 || Math.abs(netActual) > 0) {
+            if (planned > 0 || Math.abs(actual) > 0) {
                 incomeLinesTemp.push({
                     category: displayName,
-                    planned: plannedAmount, 
-                    actual: netActual,      
-                    difference: netActual - plannedAmount, 
-                    percentage: plannedAmount > 0 ? (netActual / plannedAmount) * 100 : 0
+                    planned: planned,
+                    actual: actual,
+                    difference: actual - planned, // Surplus is positive
+                    percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         } else {
-            // === EXPENSE LANE ===
-            // Actual = (Money Out) - (Money In/Rebates)
-            const netActual = expenseSum - incomeSum; 
-
-            if (plannedAmount > 0 || Math.abs(netActual) > 0) {
+            // === EXPENSE LANE (Default for everything else) ===
+            const actual = exp - inc; // Net Spending
+            
+            if (planned > 0 || Math.abs(actual) > 0) {
                 expenseLinesTemp.push({
                     category: displayName,
-                    planned: plannedAmount, 
-                    actual: netActual,      
-                    difference: plannedAmount - netActual, 
-                    percentage: plannedAmount > 0 ? (netActual / plannedAmount) * 100 : 0
+                    planned: planned,
+                    actual: actual,
+                    difference: planned - actual, // Under budget is positive (Good)
+                    percentage: planned > 0 ? (actual / planned) * 100 : 0
                 });
             }
         }
     });
 
-    // 4. Sort
-    incomeLinesTemp.sort((a, b) => b.planned - a.planned); 
+    // 4. Sort (Biggest budget items first)
+    incomeLinesTemp.sort((a, b) => b.planned - a.planned);
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
     setIncomeLines(incomeLinesTemp);
@@ -196,7 +212,7 @@ export default function BudgetVsActual() {
     }).format(amount);
   };
 
-  // Totals
+  // Totals Calculation
   const totalIncomePlanned = incomeLines.reduce((sum, line) => sum + line.planned, 0);
   const totalIncomeActual = incomeLines.reduce((sum, line) => sum + line.actual, 0);
   const totalIncomeDifference = totalIncomeActual - totalIncomePlanned;
@@ -209,9 +225,7 @@ export default function BudgetVsActual() {
   const netActual = totalIncomeActual - totalExpenseActual;
   const netDifference = netActual - netPlanned;
 
-  const projectedClosing = openingBalance + netActual;
-
-  const selectedPeriod = fiscalPeriods.find(p => p.id === selectedPeriodId);
+  const projectedClosingActual = openingBalance + netActual;
 
   const handlePrint = () => {
     window.print();
@@ -226,7 +240,7 @@ export default function BudgetVsActual() {
       <div className="flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Budget vs Actual Report</h1>
-          <p className="text-gray-600 mt-1">Compare accrued income & expenses with actual performance</p>
+          <p className="text-gray-600 mt-1">Compare planned budget with actual performance</p>
         </div>
         <button
           onClick={handlePrint}
@@ -264,11 +278,12 @@ export default function BudgetVsActual() {
               Budget vs Actual Comparison Report
             </h2>
             <h3 className="text-xl font-semibold text-gray-700 mb-3">{currentSite?.name}</h3>
-            {selectedPeriod && (
+            {/* activePeriod removed from state as it wasn't being used consistently, using find inside render */}
+            {fiscalPeriods.find(p => p.id === selectedPeriodId) && (
               <div className="flex items-center justify-center gap-2 text-gray-600">
                 <Calendar className="w-4 h-4" />
                 <span>
-                  {format(new Date(selectedPeriod.start_date), 'MMMM d, yyyy')} - {format(new Date(selectedPeriod.end_date), 'MMMM d, yyyy')}
+                  {format(new Date(fiscalPeriods.find(p => p.id === selectedPeriodId)!.start_date), 'MMMM d, yyyy')} - {format(new Date(fiscalPeriods.find(p => p.id === selectedPeriodId)!.end_date), 'MMMM d, yyyy')}
                 </span>
               </div>
             )}
@@ -283,7 +298,7 @@ export default function BudgetVsActual() {
               <div>
                 <p className="text-sm text-white/70 mb-1">Opening Cash Balance</p>
                 <p className="text-2xl font-bold">{formatCurrency(openingBalance)}</p>
-                <p className="text-xs text-white/50">Starting balance (Converted to TRY)</p>
+                <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
               </div>
               <div>
                 <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
@@ -293,9 +308,9 @@ export default function BudgetVsActual() {
                 <p className="text-xs text-white/50">Actual Income - Actual Expenses</p>
               </div>
               <div className="pt-4 md:pt-0 md:border-l md:border-white/20 md:pl-8">
-                <p className="text-sm text-white/70 mb-1">Projected Closing Balance</p>
+                <p className="text-sm text-white/70 mb-1">Estimated Closing Balance</p>
                 <p className="text-3xl font-bold text-white">
-                  {formatCurrency(projectedClosing)}
+                  {formatCurrency(projectedClosingActual)}
                 </p>
                 <p className="text-xs text-white/50">Opening + Net Actual</p>
               </div>
@@ -462,46 +477,3 @@ export default function BudgetVsActual() {
                     <tr className="border-t-2 border-gray-300 bg-orange-50 font-bold">
                       <td className="py-3 px-4 text-gray-900">Total Expenses</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpensePlanned)}</td>
-                      <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpenseActual)}</td>
-                      <td className={`py-3 px-4 text-right ${totalExpenseDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        {formatCurrency(totalExpenseDifference)}
-                      </td>
-                      <td className="py-3 px-4 text-right text-gray-900">
-                        {totalExpensePlanned > 0 ? `${((totalExpenseActual / totalExpensePlanned) * 100).toFixed(1)}%` : '-'}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
-          </div>
-
-          <div className="border-t-2 border-gray-300 pt-4">
-            <div className="bg-gray-100 rounded-lg p-4">
-              <div className="flex justify-between items-center">
-                <span className="text-lg font-bold text-gray-900">Net Period Position (Income - Expenses)</span>
-                <div className="text-right">
-                  <div className="text-sm text-gray-600">
-                    Planned: <span className="font-semibold text-gray-900">{formatCurrency(netPlanned)}</span>
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    Actual: <span className="font-semibold text-gray-900">{formatCurrency(netActual)}</span>
-                  </div>
-                  <div className="text-lg font-bold mt-1">
-                    Variance: <span className={netDifference >= 0 ? 'text-green-600' : 'text-red-600'}>
-                      {formatCurrency(netDifference)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="text-center text-sm text-gray-500 pt-4 border-t border-gray-200">
-            Report generated on {format(new Date(), 'MMMM d, yyyy')}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
