@@ -5,8 +5,6 @@ import { supabase } from '../lib/supabase';
 import { FileText, Loader2, Download, TrendingUp, TrendingDown, Calendar, Wallet } from 'lucide-react';
 import { format } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
-// We remove the dependency on hardcoded lists for calculation
-// import { INCOME_CATEGORIES, EXPENSE_CATEGORIES } from '../lib/constants'; 
 
 interface ReportLine {
   category: string;
@@ -28,8 +26,6 @@ export default function BudgetVsActual() {
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
-  
-  // New state for Cash Position
   const [openingBalance, setOpeningBalance] = useState(0);
 
   const canView = currentRole?.role === 'admin' || (canAccess && canAccess('/budget-vs-actual'));
@@ -105,27 +101,23 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FIXED: Dynamic Category Detection (No more hardcoded lists!)
+  // ✅ FIXED LOGIC: Strict Income vs Expense Separation
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
-    // 1. Gather ALL unique category names from both Budget and Ledger
+    // 1. Identify all unique categories used in Budget OR Ledger
     const allCategories = new Set<string>();
-    
-    // Add from Budget
     categories.forEach(c => allCategories.add(c.category_name));
-    
-    // Add from Ledger (excluding transfers)
     entries.forEach(e => {
-        if (e.category !== 'Transfer') {
-            allCategories.add(e.category);
-        }
+        if (e.category !== 'Transfer') allCategories.add(e.category);
     });
 
     const incomeLinesTemp: ReportLine[] = [];
     const expenseLinesTemp: ReportLine[] = [];
 
-    // 2. Iterate through EVERY category found
+    // 2. Define Strict Income Keywords (The Logic you requested)
+    const STRICT_INCOME_KEYWORDS = ['Maintenance', 'Fee', 'Dues', 'Aidat', 'Income', 'Interest'];
+
     allCategories.forEach(catName => {
-        // Calculate Actuals (separating income vs expense entries for this category)
+        // Calculate Totals (Converted to TRY)
         const incomeSum = entries
             .filter(e => e.category === catName && e.entry_type === 'income')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -134,48 +126,45 @@ export default function BudgetVsActual() {
             .filter(e => e.category === catName && e.entry_type === 'expense')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
-        // Find Budgeted Amount
         const budgetItem = categories.find(c => c.category_name === catName);
         const plannedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
 
-        // 3. Classify: Is this an Income line or Expense line?
-        
-        // CASE A: It has Income actuals -> Add to Income Report
-        if (incomeSum > 0 || catName.includes('Dues') || catName.includes('Fees')) {
-             // Even if expenseSum exists (refunds?), we focus on the Income aspect here
-             // Note: Usually categories are distinct. If a category has BOTH, we might split it or net it.
-             // For simplicity/clarity, we put it in Income if it behaves like Income.
-             const percentage = plannedAmount > 0 ? (incomeSum / plannedAmount) * 100 : 0;
+        // 3. Determine if this category is strictly Income
+        const isStrictlyIncome = STRICT_INCOME_KEYWORDS.some(k => catName.includes(k));
+
+        if (isStrictlyIncome) {
+             // ---> ADD TO INCOME TABLE
+             // Even if there are expenses (refunds), we net them against income here
+             const netActualIncome = incomeSum - expenseSum; 
              
-             // Only push if it's primarily an income category or has income data
-             if (incomeSum > 0 || (plannedAmount > 0 && (catName === 'Dues' || catName.includes('Income')))) {
+             // Only add if relevant (has budget OR has actuals)
+             if (plannedAmount > 0 || Math.abs(netActualIncome) > 0) {
                  incomeLinesTemp.push({
                     category: catName,
-                    planned: catName.includes('Dues') ? plannedAmount : 0, // Dues usually have a target, others might not
-                    actual: incomeSum,
-                    difference: incomeSum - (catName.includes('Dues') ? plannedAmount : 0),
-                    percentage
+                    planned: plannedAmount, // "Accrual" Target
+                    actual: netActualIncome, // Actual Collected (minus refunds)
+                    difference: netActualIncome - plannedAmount,
+                    percentage: plannedAmount > 0 ? (netActualIncome / plannedAmount) * 100 : 0
                  });
              }
-        }
+        } else {
+            // ---> ADD TO EXPENSE TABLE
+            // Standard Expense Logic
+            const netActualExpense = expenseSum - incomeSum; // Net expenses (minus any refunds/rebates)
 
-        // CASE B: It has Expense actuals OR it is a Budgeted Item -> Add to Expense Report
-        // (Most budgeted items are expenses in HOA context)
-        if (expenseSum > 0 || (plannedAmount > 0 && !catName.includes('Dues') && !catName.includes('Income'))) {
-            const difference = plannedAmount - expenseSum; // Budget - Actual (Positive is good)
-            const percentage = plannedAmount > 0 ? (expenseSum / plannedAmount) * 100 : 0;
-
-            expenseLinesTemp.push({
-                category: catName,
-                planned: plannedAmount,
-                actual: expenseSum,
-                difference,
-                percentage
-            });
+            if (plannedAmount > 0 || Math.abs(netActualExpense) > 0) {
+                expenseLinesTemp.push({
+                    category: catName,
+                    planned: plannedAmount, // Spending Budget
+                    actual: netActualExpense, // Actual Spent
+                    difference: plannedAmount - netActualExpense, // Remaining Budget
+                    percentage: plannedAmount > 0 ? (netActualExpense / plannedAmount) * 100 : 0
+                });
+            }
         }
     });
 
-    // 4. Sort lines (High to Low actuals usually looks best, or alphabetical)
+    // 4. Sort by Actual Amount (Highest first)
     incomeLinesTemp.sort((a, b) => b.actual - a.actual);
     expenseLinesTemp.sort((a, b) => b.actual - a.actual);
 
@@ -212,33 +201,9 @@ export default function BudgetVsActual() {
     window.print();
   };
 
-  if (!canView) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center p-8 bg-white rounded-xl shadow-sm border border-gray-100 max-w-md">
-          <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">Access Restricted</h2>
-          <p className="text-gray-600 mb-4">
-            You do not have permission to view this financial report.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
+  if (!canView) return <div className="flex items-center justify-center min-h-[60vh]">Access Denied</div>;
   if (loading) return <div className="flex items-center justify-center min-h-[60vh]"><Loader2 className="w-8 h-8 animate-spin text-[#002561]" /></div>;
-
-  if (fiscalPeriods.length === 0) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center">
-          <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-900 mb-2">No Fiscal Periods</h2>
-          <p className="text-gray-600">Create a fiscal period to generate budget reports.</p>
-        </div>
-      </div>
-    );
-  }
+  if (fiscalPeriods.length === 0) return <div className="flex items-center justify-center min-h-[60vh]">No Fiscal Periods</div>;
 
   return (
     <div className="space-y-6">
@@ -305,7 +270,7 @@ export default function BudgetVsActual() {
                 <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
               </div>
               <div>
-                <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
+                <p className="text-sm text-white/70 mb-1">Net Period Change</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
@@ -346,7 +311,7 @@ export default function BudgetVsActual() {
               <h4 className="text-sm font-medium text-orange-900 mb-2">Total Expenses</h4>
               <div className="space-y-1">
                 <div className="flex justify-between text-sm">
-                  <span className="text-orange-700">Planned:</span>
+                  <span className="text-orange-700">Budget:</span>
                   <span className="font-semibold text-orange-900">{formatCurrency(totalExpensePlanned)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
