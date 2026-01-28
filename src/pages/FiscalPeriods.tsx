@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
-import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from '../lib/constants';
+import { EXPENSE_CATEGORIES } from '../lib/constants';
 
 interface Account {
   id: string;
@@ -148,13 +148,16 @@ export default function FiscalPeriods() {
   const activatePeriod = async (periodId: string) => {
     setActionLoading(true);
 
+    // 1. Generate the dues entries in the database
     await supabase.rpc('generate_fiscal_period_dues', {
       p_fiscal_period_id: periodId,
     });
 
+    // 2. Refresh data to show new totals immediately
     await fetchPeriodDetails(periodId);
     await fetchPeriods();
     
+    // 3. Ensure selected period object is up to date
     if (selectedPeriod?.id === periodId) {
       const { data } = await supabase
         .from('fiscal_periods')
@@ -175,31 +178,24 @@ export default function FiscalPeriods() {
   };
 
   // ✅ HELPER: Clean strings for matching (Matches BudgetVsActual Logic)
-  const cleanString = (str: string) => {
+  const normalizeCategory = (str: string) => {
       return str.toLowerCase()
           .replace('communual', 'communal') // Fix typo
           .replace(/payments?|payment/g, '') // Remove 'payment' words
           // KEEP 'fee' because 'Maintenance Fee' needs it
+          .replace(/\s+/g, ' ')
           .trim();
   };
 
   // ✅ HELPER: Determine Income vs Expense (Matches BudgetVsActual Logic)
   const checkIsIncome = (name: string) => {
       const lower = name.toLowerCase().trim();
-      const cleanName = cleanString(name);
-
-      // A. Check against OFFICIAL Income List
-      const isOfficialIncome = INCOME_CATEGORIES.some(cat => {
-          const cleanCat = cleanString(cat);
-          return lower === cat.toLowerCase() || cleanName === cleanCat || lower.includes(cleanCat);
-      });
-      if (isOfficialIncome) return true;
-
-      // B. Fallback Keywords
+      
+      // Strict Income Keywords
       const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
       if (incomeKeywords.some(k => lower.includes(k))) return true;
 
-      // C. Special Logic for "Fee"
+      // Special Logic for "Fee" (Maintenance Fee = Income, Accountant Fee = Expense)
       if (lower.includes('maintenance') && lower.includes('fee')) return true;
 
       return false; // Defaults to Expense
@@ -329,29 +325,26 @@ export default function FiscalPeriods() {
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
                         
-                        // ✅ FIX APPLIED HERE: Smart Logic to calculate Actuals
-                        const catNameClean = cleanString(cat.category_name);
+                        // ✅ FIX: Use Smart Matching Logic
+                        const normCatName = normalizeCategory(cat.category_name);
                         const isIncome = checkIsIncome(cat.category_name);
 
-                        // Find matching entries (ignoring typos and noise words)
                         const categoryActual = ledgerEntries
                             .filter(e => {
                                 if (e.category === 'Transfer') return false;
-                                const entryClean = cleanString(e.category);
-                                // Smart Match: Exact, Substring, or Reverse Substring
-                                return entryClean === catNameClean || 
-                                       entryClean.includes(catNameClean) || 
-                                       catNameClean.includes(entryClean);
+                                const normEntryCat = normalizeCategory(e.category);
+                                // Check for exact match, substring match, or reverse substring match
+                                return normEntryCat === normCatName || 
+                                       normEntryCat.includes(normCatName) || 
+                                       normCatName.includes(normEntryCat);
                             })
                             .reduce((sum, e) => {
                                 const val = Number(e.amount_reporting_try || e.amount);
-                                // If this is an INCOME Category (e.g. Dues):
-                                // We want "Collections". Income adds (+), Refunds subtract (-).
+                                // If Income Category: Collected (+), Refunds (-)
                                 if (isIncome) {
                                     return sum + (e.entry_type === 'income' ? val : -val);
                                 }
-                                // If this is an EXPENSE Category (e.g. Electric):
-                                // We want "Spending". Expenses add (+), Rebates subtract (-).
+                                // If Expense Category: Spent (+), Rebates (-)
                                 else {
                                     return sum + (e.entry_type === 'expense' ? val : -val);
                                 }
@@ -585,13 +578,6 @@ export default function FiscalPeriods() {
     </div>
   );
 }
-
-// ... (KEEP SUB-COMPONENTS: StatusBadge, CreatePeriodModal, RolloverModal, AddCategoryModal, EditCategoryModal, AddEntryModal, SetDuesModal AS IS)
-// Important: Ensure you copy the sub-components from your previous file to the bottom of this one. 
-// They are required for the code to run but were unchanged in this logic fix.
-// (I omitted them here for brevity, but they must be present in your final file).
-
-// ... SUB COMPONENTS ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -1246,7 +1232,6 @@ function AddEntryModal({
   );
 }
 
-// ✅ FIXED: Added `type="button"` to ALL buttons to prevent form submission/refresh
 function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: SetDuesModalProps) {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'uniform' | 'individual'>('uniform');
@@ -1294,7 +1279,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     }
 
     setLoading(false);
-    onSet(); // This triggers parent to run generate_fiscal_period_dues
+    onSet(); 
   };
 
   const handleSetIndividual = async () => {
@@ -1326,7 +1311,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     }
 
     setLoading(false);
-    onSet(); // This triggers parent to run generate_fiscal_period_dues
+    onSet(); 
   };
 
   return (
@@ -1362,7 +1347,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 
           <div className="grid grid-cols-2 gap-3">
             <button
-              type="button" // ✅ Explicit button type
+              type="button"
               onClick={() => setMode('uniform')}
               className={`p-4 rounded-xl border-2 text-center transition-all ${
                 mode === 'uniform'
@@ -1374,7 +1359,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
               <div className="text-xs mt-1">Set one amount for all units</div>
             </button>
             <button
-              type="button" // ✅ Explicit button type
+              type="button"
               onClick={() => setMode('individual')}
               className={`p-4 rounded-xl border-2 text-center transition-all ${
                 mode === 'individual'
@@ -1436,14 +1421,14 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
-            type="button" // ✅ Explicit button type
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
           >
             Cancel
           </button>
           <button
-            type="button" // ✅ Explicit button type
+            type="button"
             onClick={mode === 'uniform' ? handleSetUniform : handleSetIndividual}
             disabled={loading || (mode === 'uniform' ? !uniformAmount : false)}
             className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
@@ -1456,17 +1441,3 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     </div>
   );
 }
-
-// ... other components (Unit, CURRENCIES) are already included above
-interface Unit {
-  id: string;
-  unit_number: string;
-  owner_name: string | null;
-}
-
-const CURRENCIES = [
-  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
-  { code: 'EUR', symbol: '€', name: 'Euro' },
-  { code: 'USD', symbol: '$', name: 'US Dollar' },
-  { code: 'GBP', symbol: '£', name: 'British Pound' },
-];
