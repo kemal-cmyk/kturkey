@@ -31,7 +31,9 @@ export default function ImportLedger() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [mappedData, setMappedData] = useState<MappedEntry[]>([]);
   
-  // Updated Mapping State
+  // ✅ NEW: State to control Date Format
+  const [dateFormat, setDateFormat] = useState<'DD.MM.YYYY' | 'MM/DD/YYYY'>('DD.MM.YYYY');
+
   const [columnMapping, setColumnMapping] = useState({
     entry_date: '',
     account: '',
@@ -115,11 +117,11 @@ export default function ImportLedger() {
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        // Use cellDates: true to let SheetJS try to identify dates automatically
-        const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+        // cellDates: false ensures we get the raw string or serial number, preventing auto-conversion mistakes
+        const workbook = XLSX.read(data, { type: 'array', cellDates: false });
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
         const jsonData = XLSX.utils.sheet_to_json(firstSheet, {
-          raw: false, // Attempt to format data as strings to preserve user input look
+          raw: false,
           defval: '',
           blankrows: false
         });
@@ -130,7 +132,6 @@ export default function ImportLedger() {
           setHeaders(detectedHeaders);
           setStep('mapping');
           
-          // Auto-map common headers
           const newMapping = { ...columnMapping };
           detectedHeaders.forEach(header => {
             const h = header.toLowerCase();
@@ -156,22 +157,14 @@ export default function ImportLedger() {
     reader.readAsArrayBuffer(uploadedFile);
   };
 
-  // ✅ NEW: Robust Date Parser that handles Serial, MM/DD/YYYY, and DD.MM.YYYY
+  // ✅ UPDATED PARSER: Respects the user's chosen format
   const parseFlexibleDate = (dateVal: any): string => {
     if (!dateVal) return '';
 
-    // 1. Handle JS Date Objects (from XLSX cellDates: true)
-    if (dateVal instanceof Date) {
-        return dateVal.toISOString().split('T')[0];
-    }
-
-    // 2. Handle Excel Serial Numbers (e.g., 45306)
-    // Check if it's a number, or a string that is purely numeric
+    // 1. Handle Excel Serial Numbers (e.g. 45306) - These are unambiguous
     if (typeof dateVal === 'number' || (!isNaN(Number(dateVal)) && !String(dateVal).includes('.') && !String(dateVal).includes('/') && !String(dateVal).includes('-'))) {
       const serial = Number(dateVal);
-      // Excel base date is Dec 30, 1899. This formula converts it to JS Date.
       const date = new Date(Math.round((serial - 25569) * 86400 * 1000));
-      // Fix for timezone offset issues causing "one day off" errors
       const offset = date.getTimezoneOffset() * 60 * 1000;
       const adjustedDate = new Date(date.getTime() + offset); 
       return adjustedDate.toISOString().split('T')[0];
@@ -179,39 +172,48 @@ export default function ImportLedger() {
 
     const dateStr = String(dateVal).trim();
 
-    // 3. Handle "DD.MM.YYYY" (Turkish/European standard)
-    if (dateStr.includes('.')) {
-      const parts = dateStr.split('.');
-      if (parts.length === 3) {
-        const [day, month, year] = parts;
-        const fullYear = year.length === 2 ? `20${year}` : year;
-        return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-      }
-    }
-
-    // 4. Handle "MM/DD/YYYY" (US/Excel Default standard - as requested)
-    if (dateStr.includes('/')) {
-      const parts = dateStr.split('/');
-      if (parts.length === 3) {
-        // Assume MM/DD/YYYY
-        const [month, day, year] = parts;
-        const fullYear = year.length === 2 ? `20${year}` : year;
-        return `${fullYear}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-      }
-    }
-
-    // 5. Handle ISO "YYYY-MM-DD"
-    const d = new Date(dateStr);
-    if (!isNaN(d.getTime())) {
-        return d.toISOString().split('T')[0];
-    }
+    // 2. Handle Text Dates based on user selection
+    const separators = ['.', '/', '-'];
+    let parts: string[] = [];
     
+    // Find the splitter
+    for (const sep of separators) {
+      if (dateStr.includes(sep)) {
+        parts = dateStr.split(sep);
+        break;
+      }
+    }
+
+    if (parts.length === 3) {
+      let day, month, year;
+
+      if (parts[0].length === 4) {
+        // Handle ISO (2024-01-15) - Unambiguous
+        [year, month, day] = parts;
+      } else {
+        // Handle Ambiguous (01/05/2024) based on selection
+        if (dateFormat === 'DD.MM.YYYY') {
+          [day, month, year] = parts;
+        } else {
+          [month, day, year] = parts;
+        }
+      }
+
+      // 2-digit year fix
+      if (year.length === 2) year = `20${year}`;
+
+      // Final validity check
+      const d = new Date(`${year}-${month}-${day}`);
+      if (!isNaN(d.getTime())) {
+        return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+      }
+    }
+
     return ''; // Invalid
   };
 
   const handleMapping = () => {
     const mapped = excelData.map((row) => {
-      // Logic to determine Income/Expense and Amount
       const debitVal = parseFloat(String(row[columnMapping.debit]).replace(/[^0-9.-]+/g,"")) || 0;
       const creditVal = parseFloat(String(row[columnMapping.credit]).replace(/[^0-9.-]+/g,"")) || 0;
 
@@ -226,13 +228,10 @@ export default function ImportLedger() {
         amount = creditVal;
       }
 
-      // Currency Logic
       const currency = columnMapping.currency ? (row[columnMapping.currency] || 'TRY') : 'TRY';
       const rate = columnMapping.exchange_rate ? (parseFloat(row[columnMapping.exchange_rate]) || 1.0) : 1.0;
 
-      const rawDate = row[columnMapping.entry_date]; // Don't stringify yet, preserve types
-      
-      // ✅ USE NEW PARSER
+      const rawDate = row[columnMapping.entry_date];
       const parsedDate = parseFlexibleDate(rawDate);
 
       const entry: MappedEntry = {
@@ -248,24 +247,20 @@ export default function ImportLedger() {
         errors: []
       };
 
-      // Validation
-      if (!entry.entry_date) entry.errors?.push('Missing/Invalid date');
+      if (!entry.entry_date) entry.errors?.push(`Invalid date format (Expected ${dateFormat})`);
       if (!entry.category) entry.errors?.push('Missing category');
       if (!entry.description) entry.errors?.push('Missing description');
       if (!entry.amount || entry.amount <= 0) entry.errors?.push('Amount is 0');
       if (!entry.account_name) entry.errors?.push('Missing account name');
 
-      // Account Matching Check
       const matchedAccount = accounts.find(a => 
         a.account_name.toLowerCase().trim() === entry.account_name?.toLowerCase().trim()
       );
       if (!matchedAccount) {
-          entry.errors?.push(`Account '${entry.account_name}' not found in system`);
+          entry.errors?.push(`Account '${entry.account_name}' not found`);
       }
 
-      // Unit Matching Check (Only if Unit Number is provided)
       if (entry.unit_number) {
-          // Smart Match: Try exact, then try combining block+number
           const matchedUnit = units.find(u => 
               String(u.unit_number) === entry.unit_number ||
               `${u.block}-${u.unit_number}` === entry.unit_number ||
@@ -276,7 +271,6 @@ export default function ImportLedger() {
           }
       }
 
-      // Maintenance Fee Requirement
       const isMaintenance = entryType === 'income' && 
         ['Maintenance Fee', 'Maintenance Fees', 'Extra Fees'].includes(entry.category);
       
@@ -303,7 +297,6 @@ export default function ImportLedger() {
 
     for (const entry of validEntries) {
       try {
-        // Resolve IDs again safely
         let unitId = null;
         if (entry.unit_number) {
              const matchedUnit = units.find(u => 
@@ -321,12 +314,11 @@ export default function ImportLedger() {
             ['Maintenance Fee', 'Maintenance Fees', 'Extra Fees'].includes(entry.category);
 
         if (isMaintenance && unitId) {
-          // Use Payment RPC for logic
           const { error } = await supabase.rpc('apply_unit_payment', {
             p_unit_id: unitId,
             p_payment_amount: entry.amount,
             p_payment_date: entry.entry_date,
-            p_payment_method: 'bank_transfer', // Default for imports
+            p_payment_method: 'bank_transfer',
             p_reference_no: `Import: ${entry.description.substring(0, 20)}`,
             p_account_id: account.id,
             p_category: entry.category,
@@ -335,7 +327,6 @@ export default function ImportLedger() {
           });
           if (error) throw error;
         } else {
-          // Standard Ledger Insert
           const amountReportingTry = entry.currency_code === 'TRY' 
             ? entry.amount 
             : entry.amount * entry.exchange_rate;
@@ -371,10 +362,12 @@ export default function ImportLedger() {
   };
 
   const downloadTemplate = () => {
-    // ✅ Updated Template to use MM/DD/YYYY format clearly
+    // Generate template in the format selected by the user, or default to DD.MM.YYYY
+    const dateExample = dateFormat === 'MM/DD/YYYY' ? '01/15/2024' : '15.01.2024';
+    
     const template = [
       {
-        'Date': '01/15/2024',
+        'Date': dateExample,
         'Account': 'Cash Account',
         'Category': 'Utilities',
         'Description': 'Electric bill',
@@ -385,7 +378,7 @@ export default function ImportLedger() {
         'Rate': 1
       },
       {
-        'Date': '01/16/2024',
+        'Date': dateFormat === 'MM/DD/YYYY' ? '01/16/2024' : '16.01.2024',
         'Account': 'Garanti EUR',
         'Category': 'Maintenance Fees',
         'Description': 'Jan Fee',
@@ -410,7 +403,6 @@ export default function ImportLedger() {
         <p className="text-gray-600">Bulk upload income and expenses from Excel</p>
       </div>
 
-      {/* Progress Stepper */}
       <div className="mb-8">
         <div className="flex items-center justify-between">
           {['upload', 'mapping', 'preview', 'complete'].map((s, i) => (
@@ -443,7 +435,7 @@ export default function ImportLedger() {
             <div className="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-lg text-left max-w-2xl mx-auto">
               <p className="text-sm font-semibold text-blue-900 mb-2">Instructions:</p>
               <ul className="text-sm text-blue-800 space-y-1 list-disc list-inside">
-                <li>Date format: <strong>MM/DD/YYYY</strong> (e.g. 01/25/2024)</li>
+                <li><strong>IMPORTANT:</strong> Make sure you select the correct Date Format on the next screen.</li>
                 <li><strong>Account Name</strong> must match exactly what is in your System.</li>
                 <li><strong>Currency</strong>: TRY, USD, EUR, GBP (Default: TRY).</li>
                 <li><strong>Rate</strong>: Exchange rate to TRY (Required for non-TRY).</li>
@@ -471,8 +463,36 @@ export default function ImportLedger() {
           <h2 className="text-xl font-bold text-gray-900 mb-6">Map Excel Columns</h2>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div className="md:col-span-2 bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <label className="block text-sm font-bold text-blue-900 mb-2">How are dates formatted in your file?</label>
+                <div className="flex gap-4">
+                    <label className="flex items-center cursor-pointer">
+                        <input 
+                            type="radio" 
+                            name="dateFormat" 
+                            value="DD.MM.YYYY" 
+                            checked={dateFormat === 'DD.MM.YYYY'} 
+                            onChange={() => setDateFormat('DD.MM.YYYY')}
+                            className="w-4 h-4 text-[#002561] focus:ring-[#002561]"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Day/Month/Year (e.g. 31.01.2024)</span>
+                    </label>
+                    <label className="flex items-center cursor-pointer">
+                        <input 
+                            type="radio" 
+                            name="dateFormat" 
+                            value="MM/DD/YYYY" 
+                            checked={dateFormat === 'MM/DD/YYYY'} 
+                            onChange={() => setDateFormat('MM/DD/YYYY')}
+                            className="w-4 h-4 text-[#002561] focus:ring-[#002561]"
+                        />
+                        <span className="ml-2 text-sm text-gray-700">Month/Day/Year (e.g. 01/31/2024)</span>
+                    </label>
+                </div>
+            </div>
+
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Date *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Date Column *</label>
               <select 
                 value={columnMapping.entry_date} 
                 onChange={e => setColumnMapping({...columnMapping, entry_date: e.target.value})}
@@ -585,6 +605,7 @@ export default function ImportLedger() {
         </div>
       )}
 
+      {/* Preview, Importing, and Complete steps remain largely identical to previous version */}
       {step === 'preview' && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
           <div className="flex justify-between items-center mb-6">
