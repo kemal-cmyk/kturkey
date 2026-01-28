@@ -22,7 +22,6 @@ export default function FiscalPeriods() {
   const [periods, setPeriods] = useState<FiscalPeriod[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<FiscalPeriod | null>(null);
   const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
-  // ✅ NEW: Store entries to calculate totals live
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]); 
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -66,7 +65,6 @@ export default function FiscalPeriods() {
     setLoading(false);
   };
 
-  // ✅ UPDATED: Fetch Categories AND Entries to calculate totals correctly
   const fetchPeriodDetails = async (periodId: string) => {
     const [catRes, entriesRes] = await Promise.all([
         supabase
@@ -89,21 +87,27 @@ export default function FiscalPeriods() {
     fetchPeriodDetails(period.id);
   };
 
+  // ✅ Triggered when regenerating dues to refresh totals
   const activatePeriod = async (periodId: string) => {
     setActionLoading(true);
 
+    // 1. Generate the dues entries in the database
     await supabase.rpc('generate_fiscal_period_dues', {
       p_fiscal_period_id: periodId,
     });
 
+    // 2. Refresh data to show new totals immediately
+    await fetchPeriodDetails(periodId);
     await fetchPeriods();
+    
+    // 3. Ensure selected period object is up to date
     if (selectedPeriod?.id === periodId) {
       const { data } = await supabase
         .from('fiscal_periods')
         .select('*')
         .eq('id', periodId)
         .single();
-      setSelectedPeriod(data);
+      if (data) setSelectedPeriod(data);
     }
     setActionLoading(false);
   };
@@ -133,6 +137,7 @@ export default function FiscalPeriods() {
         </div>
         {isAdmin && (
           <button
+            type="button" // ✅ Explicit button type
             onClick={() => setShowCreateModal(true)}
             className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
           >
@@ -151,6 +156,7 @@ export default function FiscalPeriods() {
               <p className="text-gray-500">No financial periods yet</p>
               {isAdmin && (
                 <button
+                  type="button"
                   onClick={() => setShowCreateModal(true)}
                   className="mt-4 text-[#002561] font-medium hover:underline"
                 >
@@ -163,6 +169,7 @@ export default function FiscalPeriods() {
               {periods.map((period) => (
                 <button
                   key={period.id}
+                  type="button" // ✅ Explicit button type
                   onClick={() => handleSelectPeriod(period)}
                   className={`w-full p-4 rounded-xl border text-left transition-colors ${
                     selectedPeriod?.id === period.id
@@ -224,6 +231,7 @@ export default function FiscalPeriods() {
                     <h4 className="font-medium text-gray-900">Budget Breakdown</h4>
                     {isAdmin && selectedPeriod.status === 'draft' && (
                       <button
+                        type="button"
                         onClick={() => setShowAddCategoryModal(true)}
                         className="text-sm text-[#002561] hover:underline font-medium"
                       >
@@ -234,7 +242,6 @@ export default function FiscalPeriods() {
                   {budgetCategories.length > 0 ? (
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
-                        // ✅ FIX: Calculate Actual Spent dynamically from entries (Base Currency Logic)
                         const categoryActual = ledgerEntries
                             .filter(e => e.category === cat.category_name)
                             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -255,6 +262,7 @@ export default function FiscalPeriods() {
                                 </span>
                                 {isAdmin && selectedPeriod.status === 'active' && (
                                   <button
+                                    type="button"
                                     onClick={() => setAddingEntryCategory(cat)}
                                     className="p-1.5 bg-[#002561] text-white rounded hover:bg-[#003380] transition-colors"
                                     title="Add entry to this category"
@@ -265,6 +273,7 @@ export default function FiscalPeriods() {
                                 {isAdmin && selectedPeriod.status === 'draft' && (
                                   <div className="flex items-center space-x-1">
                                     <button
+                                      type="button"
                                       onClick={() => setEditingCategory(cat)}
                                       className="p-1 text-[#002561] hover:bg-white rounded transition-colors"
                                       title="Edit category"
@@ -272,6 +281,7 @@ export default function FiscalPeriods() {
                                       <Edit2 className="w-3.5 h-3.5" />
                                     </button>
                                     <button
+                                      type="button"
                                       onClick={async () => {
                                         if (confirm(`Delete "${cat.category_name}"?`)) {
                                           await supabase
@@ -315,6 +325,7 @@ export default function FiscalPeriods() {
                 {isAdmin && selectedPeriod.status === 'draft' && (
                   <div className="flex items-center space-x-3">
                     <button
+                      type="button"
                       onClick={() => activatePeriod(selectedPeriod.id)}
                       disabled={actionLoading}
                       className="flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
@@ -337,12 +348,13 @@ export default function FiscalPeriods() {
                         <div>
                           <p className="font-medium text-blue-900">Monthly Dues Setup</p>
                           <p className="text-sm text-blue-700 mt-1">
-                            Set monthly due amounts for all units in this period. You can set the same amount
-                            for all units or different amounts per unit.
+                            Set monthly due amounts for all units in this period. 
+                            <strong> Changing this will regenerate all future debts.</strong>
                           </p>
                         </div>
                       </div>
                       <button
+                        type="button"
                         onClick={() => setShowSetDuesModal(true)}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap"
                       >
@@ -363,6 +375,7 @@ export default function FiscalPeriods() {
                           balances and legal statuses to the next period.
                         </p>
                         <button
+                          type="button"
                           onClick={() => setShowRolloverModal(true)}
                           className="mt-3 text-orange-700 font-medium hover:underline flex items-center"
                         >
@@ -384,9 +397,10 @@ export default function FiscalPeriods() {
         </div>
       </div>
 
-      {showCreateModal && (
+      {/* MODALS */}
+      {showCreateModal && currentSite && (
         <CreatePeriodModal
-          siteId={currentSite!.id}
+          siteId={currentSite.id}
           onClose={() => setShowCreateModal(false)}
           onCreated={() => {
             setShowCreateModal(false);
@@ -395,10 +409,10 @@ export default function FiscalPeriods() {
         />
       )}
 
-      {showRolloverModal && selectedPeriod && (
+      {showRolloverModal && selectedPeriod && currentSite && (
         <RolloverModal
           period={selectedPeriod}
-          siteId={currentSite!.id}
+          siteId={currentSite.id}
           onClose={() => setShowRolloverModal(false)}
           onCompleted={() => {
             setShowRolloverModal(false);
@@ -451,8 +465,10 @@ export default function FiscalPeriods() {
           siteId={currentSite.id}
           defaultCurrency={currentSite.default_currency || 'TRY'}
           onClose={() => setShowSetDuesModal(false)}
+          // ✅ FIX: Reload period data after setting dues to show new entries
           onSet={() => {
             setShowSetDuesModal(false);
+            activatePeriod(selectedPeriod.id); 
           }}
         />
       )}
@@ -460,31 +476,28 @@ export default function FiscalPeriods() {
   );
 }
 
+// ... SUB COMPONENTS ...
+
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
-  const config = {
+  const config: Record<string, { icon: any; color: string; label: string }> = {
     draft: { icon: Clock, color: 'bg-gray-100 text-gray-700', label: 'Draft' },
     active: { icon: Check, color: 'bg-green-100 text-green-700', label: 'Active' },
     closed: { icon: Archive, color: 'bg-blue-100 text-blue-700', label: 'Closed' },
-  }[status] || { icon: Clock, color: 'bg-gray-100 text-gray-700', label: status };
-
-  const Icon = config.icon;
+  };
+  
+  const item = config[status] || { icon: Clock, color: 'bg-gray-100 text-gray-700', label: status };
+  const Icon = item.icon;
 
   return (
     <span
-      className={`inline-flex items-center rounded-full ${config.color} ${
+      className={`inline-flex items-center rounded-full ${item.color} ${
         large ? 'px-3 py-1 text-sm' : 'px-2 py-0.5 text-xs'
       }`}
     >
       <Icon className={`${large ? 'w-4 h-4 mr-1.5' : 'w-3 h-3 mr-1'}`} />
-      {config.label}
+      {item.label}
     </span>
   );
-}
-
-interface CreatePeriodModalProps {
-  siteId: string;
-  onClose: () => void;
-  onCreated: () => void;
 }
 
 function CreatePeriodModal({ siteId, onClose, onCreated }: CreatePeriodModalProps) {
@@ -622,12 +635,14 @@ function CreatePeriodModal({ siteId, onClose, onCreated }: CreatePeriodModalProp
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleCreate}
             disabled={loading}
             className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] disabled:opacity-50"
@@ -639,13 +654,6 @@ function CreatePeriodModal({ siteId, onClose, onCreated }: CreatePeriodModalProp
       </div>
     </div>
   );
-}
-
-interface RolloverModalProps {
-  period: FiscalPeriod;
-  siteId: string;
-  onClose: () => void;
-  onCompleted: () => void;
 }
 
 function RolloverModal({ period, siteId, onClose, onCompleted }: RolloverModalProps) {
@@ -734,12 +742,14 @@ function RolloverModal({ period, siteId, onClose, onCompleted }: RolloverModalPr
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleRollover}
             disabled={loading || !newPeriodId}
             className="flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50"
@@ -751,13 +761,6 @@ function RolloverModal({ period, siteId, onClose, onCompleted }: RolloverModalPr
       </div>
     </div>
   );
-}
-
-interface AddCategoryModalProps {
-  periodId: string;
-  existingCategories: BudgetCategory[];
-  onClose: () => void;
-  onAdded: () => void;
 }
 
 function AddCategoryModal({ periodId, existingCategories, onClose, onAdded }: AddCategoryModalProps) {
@@ -791,6 +794,7 @@ function AddCategoryModal({ periodId, existingCategories, onClose, onAdded }: Ad
         <div className="p-6 border-b border-gray-100 flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900">Add Budget Category</h3>
           <button
+            type="button"
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
           >
@@ -829,12 +833,14 @@ function AddCategoryModal({ periodId, existingCategories, onClose, onAdded }: Ad
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleAdd}
             disabled={loading || !categoryName.trim()}
             className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] disabled:opacity-50 transition-colors"
@@ -846,12 +852,6 @@ function AddCategoryModal({ periodId, existingCategories, onClose, onAdded }: Ad
       </div>
     </div>
   );
-}
-
-interface EditCategoryModalProps {
-  category: BudgetCategory;
-  onClose: () => void;
-  onUpdated: () => void;
 }
 
 function EditCategoryModal({ category, onClose, onUpdated }: EditCategoryModalProps) {
@@ -881,6 +881,7 @@ function EditCategoryModal({ category, onClose, onUpdated }: EditCategoryModalPr
         <div className="p-6 border-b border-gray-100 flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900">Edit Budget Category</h3>
           <button
+            type="button"
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
           >
@@ -930,12 +931,14 @@ function EditCategoryModal({ category, onClose, onUpdated }: EditCategoryModalPr
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleUpdate}
             disabled={loading || !categoryName.trim()}
             className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] disabled:opacity-50 transition-colors"
@@ -947,16 +950,6 @@ function EditCategoryModal({ category, onClose, onUpdated }: EditCategoryModalPr
       </div>
     </div>
   );
-}
-
-interface AddEntryModalProps {
-  category: BudgetCategory;
-  period: FiscalPeriod;
-  siteId: string;
-  userId: string;
-  accounts: Account[];
-  onClose: () => void;
-  onAdded: () => void;
 }
 
 function AddEntryModal({
@@ -1010,6 +1003,7 @@ function AddEntryModal({
             </p>
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 transition-colors"
           >
@@ -1112,12 +1106,14 @@ function AddEntryModal({
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
           >
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleAdd}
             disabled={loading || !amount || !accountId}
             className={`flex items-center px-4 py-2 text-white rounded-lg disabled:opacity-50 transition-colors ${
@@ -1135,27 +1131,7 @@ function AddEntryModal({
   );
 }
 
-interface SetDuesModalProps {
-  periodId: string;
-  siteId: string;
-  defaultCurrency: string;
-  onClose: () => void;
-  onSet: () => void;
-}
-
-interface Unit {
-  id: string;
-  unit_number: string;
-  owner_name: string | null;
-}
-
-const CURRENCIES = [
-  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
-  { code: 'EUR', symbol: '€', name: 'Euro' },
-  { code: 'USD', symbol: '$', name: 'US Dollar' },
-  { code: 'GBP', symbol: '£', name: 'British Pound' },
-];
-
+// ✅ FIXED: Added `type="button"` to ALL buttons to prevent form submission/refresh
 function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: SetDuesModalProps) {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'uniform' | 'individual'>('uniform');
@@ -1199,11 +1175,11 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
       console.error('Error setting dues:', error);
       alert('Failed to set dues. Please try again.');
     } else {
-      alert('Monthly dues set successfully for all units!');
+      alert('Monthly dues updated! Recalculating ledger...');
     }
 
     setLoading(false);
-    onSet();
+    onSet(); // This triggers parent to run generate_fiscal_period_dues
   };
 
   const handleSetIndividual = async () => {
@@ -1231,11 +1207,11 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
       console.error('Error setting dues:', error);
       alert('Failed to set dues. Please try again.');
     } else {
-      alert(`Monthly dues set successfully for ${unitData.length} unit(s)!`);
+      alert(`Updated ${unitData.length} units! Recalculating ledger...`);
     }
 
     setLoading(false);
-    onSet();
+    onSet(); // This triggers parent to run generate_fiscal_period_dues
   };
 
   return (
@@ -1271,7 +1247,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 
           <div className="grid grid-cols-2 gap-3">
             <button
-              type="button"
+              type="button" // ✅ Explicit button type
               onClick={() => setMode('uniform')}
               className={`p-4 rounded-xl border-2 text-center transition-all ${
                 mode === 'uniform'
@@ -1283,7 +1259,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
               <div className="text-xs mt-1">Set one amount for all units</div>
             </button>
             <button
-              type="button"
+              type="button" // ✅ Explicit button type
               onClick={() => setMode('individual')}
               className={`p-4 rounded-xl border-2 text-center transition-all ${
                 mode === 'individual'
@@ -1345,12 +1321,14 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
+            type="button" // ✅ Explicit button type
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
           >
             Cancel
           </button>
           <button
+            type="button" // ✅ Explicit button type
             onClick={mode === 'uniform' ? handleSetUniform : handleSetIndividual}
             disabled={loading || (mode === 'uniform' ? !uniformAmount : false)}
             className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
@@ -1363,3 +1341,17 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     </div>
   );
 }
+
+// ... other components (Unit, CURRENCIES) are already included above
+interface Unit {
+  id: string;
+  unit_number: string;
+  owner_name: string | null;
+}
+
+const CURRENCIES = [
+  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
+  { code: 'EUR', symbol: '€', name: 'Euro' },
+  { code: 'USD', symbol: '$', name: 'US Dollar' },
+  { code: 'GBP', symbol: '£', name: 'British Pound' },
+];
