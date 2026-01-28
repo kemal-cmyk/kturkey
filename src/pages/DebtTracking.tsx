@@ -4,18 +4,25 @@ import { supabase } from '../lib/supabase';
 import {
   AlertTriangle, Scale, FileText, Send, Search, Filter,
   ChevronDown, Loader2, Download, Clock, Calendar,
+  Wallet
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { DebtAlert } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
+// Define a richer Debt Type to handle multi-currency
+interface EnrichedDebt extends DebtAlert {
+  currency_code: string;
+  original_amount: number;
+}
+
 export default function DebtTracking() {
   const { currentSite, currentRole } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [debts, setDebts] = useState<DebtAlert[]>([]);
+  const [debts, setDebts] = useState<EnrichedDebt[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [stageFilter, setStageFilter] = useState<number | null>(null);
-  const [selectedDebt, setSelectedDebt] = useState<DebtAlert | null>(null);
+  const [selectedDebt, setSelectedDebt] = useState<EnrichedDebt | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   const isAdmin = currentRole?.role === 'admin';
@@ -30,15 +37,37 @@ export default function DebtTracking() {
     if (!currentSite) return;
     setLoading(true);
 
-    const { data, error } = await supabase
+    // 1. Fetch the Alerts (Workflow Status)
+    const { data: alertsData } = await supabase
       .from('debt_alerts')
       .select('*')
       .eq('site_id', currentSite.id)
-      .order('stage', { ascending: false })
-      .order('total_debt_amount', { ascending: false });
+      .order('stage', { ascending: false });
 
-    if (!error && data) {
-      setDebts(data);
+    if (alertsData) {
+      // 2. Fetch Actual Balances to get Currency Info
+      const { data: balances } = await supabase
+        .from('ledger_balances')
+        .select('unit_id, balance, currency_code')
+        .eq('site_id', currentSite.id)
+        .gt('balance', 0); // Only get debts
+
+      // 3. Merge Data: Attach Currency to the Alert
+      const mergedDebts = alertsData.map(alert => {
+        const unitBalance = balances?.find(b => b.unit_id === alert.unit_id);
+        return {
+          ...alert,
+          currency_code: unitBalance?.currency_code || 'TRY', // Default to TRY if missing
+          original_amount: unitBalance?.balance || alert.total_debt_amount // Use real ledger balance
+        };
+      });
+
+      // Sort by amount (converted to approximate TL value for sorting)
+      // Note: In a real app, you might want live rates. Here we assume 1:1 or use stored rates if available.
+      // For now, sorting by raw number is usually "good enough" for a list view.
+      mergedDebts.sort((a, b) => b.original_amount - a.original_amount);
+
+      setDebts(mergedDebts);
     }
     setLoading(false);
   };
@@ -97,10 +126,11 @@ export default function DebtTracking() {
     setSelectedDebt(null);
   };
 
-  const formatCurrency = (amount: number) => {
+  // ✅ New Helper: Format with correct currency symbol
+  const formatMoney = (amount: number, currency = 'TRY') => {
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
-      currency: 'TRY',
+      currency: currency,
       minimumFractionDigits: 0,
     }).format(amount);
   };
@@ -116,12 +146,23 @@ export default function DebtTracking() {
     return matchesSearch && matchesStage;
   });
 
+  // Calculate approximate Total Debt in TL for the Stats Box
+  // (Assuming EUR=35, USD=32, GBP=40 for simple estimation if live rates aren't in DB)
+  // You can adjust these multipliers or fetch them from a 'rates' table.
+  const getApproximateTL = (amount: number, currency: string) => {
+      if (currency === 'EUR') return amount * 35; 
+      if (currency === 'USD') return amount * 32;
+      if (currency === 'GBP') return amount * 40;
+      return amount; // TRY
+  };
+
   const stageStats = {
     total: debts.length,
     stage2: debts.filter(d => d.stage === 2).length,
     stage3: debts.filter(d => d.stage === 3).length,
     stage4: debts.filter(d => d.stage === 4).length,
-    totalDebt: debts.reduce((sum, d) => sum + d.total_debt_amount, 0),
+    // Sum up approximate TL value of all debts
+    totalDebt: debts.reduce((sum, d) => sum + getApproximateTL(d.original_amount, d.currency_code), 0),
   };
 
   if (loading) {
@@ -173,8 +214,8 @@ export default function DebtTracking() {
           <p className="text-2xl font-bold text-red-800">{stageStats.stage4}</p>
         </div>
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-          <p className="text-sm text-gray-500">Total Outstanding</p>
-          <p className="text-2xl font-bold text-[#002561]">{formatCurrency(stageStats.totalDebt)}</p>
+          <p className="text-sm text-gray-500">Total Est. Outstanding</p>
+          <p className="text-2xl font-bold text-[#002561]">{formatMoney(stageStats.totalDebt, 'TRY')}</p>
         </div>
       </div>
 
@@ -255,8 +296,9 @@ export default function DebtTracking() {
                       </p>
                     </div>
                     <div className="text-right">
+                      {/* ✅ FIX: Display correct currency symbol */}
                       <p className="font-bold text-lg text-gray-900">
-                        {formatCurrency(debt.total_debt_amount)}
+                        {formatMoney(debt.original_amount, debt.currency_code)}
                       </p>
                       <span
                         className={`inline-block px-2 py-0.5 text-xs rounded-full ${
@@ -315,7 +357,7 @@ export default function DebtTracking() {
 }
 
 interface DebtActionModalProps {
-  debt: DebtAlert;
+  debt: EnrichedDebt; // ✅ Updated type
   onClose: () => void;
   onWarningSent: () => void;
   onLetterGenerated: () => void;
@@ -333,10 +375,10 @@ function DebtActionModal({
 }: DebtActionModalProps) {
   const [caseNumber, setCaseNumber] = useState('');
 
-  const formatCurrency = (amount: number) => {
+  const formatMoney = (amount: number, currency: string) => {
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
-      currency: 'TRY',
+      currency: currency,
       minimumFractionDigits: 0,
     }).format(amount);
   };
@@ -370,7 +412,7 @@ function DebtActionModal({
             </div>
             <p className="text-sm text-gray-600">{debt.owner_name}</p>
             <p className="text-2xl font-bold text-[#002561] mt-2">
-              {formatCurrency(debt.total_debt_amount)}
+              {formatMoney(debt.original_amount, debt.currency_code)}
             </p>
             <p className="text-sm text-gray-500">{debt.months_overdue} months overdue</p>
           </div>
