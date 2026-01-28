@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   Building2, Calendar, Layers, Users, ArrowRight, ArrowLeft,
-  Check, Loader2, Upload, Plus, Trash2, X,
+  Check, Loader2, Upload, Plus, Trash2, X, FileSpreadsheet
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import * as XLSX from 'xlsx';
@@ -62,6 +62,37 @@ export default function SiteWizard() {
 
   const [units, setUnits] = useState<UnitInput[]>([]);
   const [fileUploaded, setFileUploaded] = useState(false);
+
+  // ✅ NEW: Function to generate and download the template
+  const downloadTemplate = () => {
+    const templateData = [
+      {
+        'Unit Number': '1',
+        'Block': 'A',
+        'Floor': 1,
+        'Unit Type': unitTypes[0]?.name || 'Standard', // Use the first type defined
+        'Share Ratio': 10,
+        'Owner Name': 'John Doe',
+        'Phone': '555-0101',
+        'Email': 'john@example.com'
+      },
+      {
+        'Unit Number': '2',
+        'Block': 'A',
+        'Floor': 2,
+        'Unit Type': unitTypes[0]?.name || 'Standard',
+        'Share Ratio': 15,
+        'Owner Name': 'Jane Smith',
+        'Phone': '555-0102',
+        'Email': 'jane@example.com'
+      }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Units Template");
+    XLSX.writeFile(wb, "site_units_template.xlsx");
+  };
 
   const handleNext = () => {
     if (currentStep === 1 && !siteName.trim()) {
@@ -306,7 +337,6 @@ export default function SiteWizard() {
           </div>
         </div>
 
-        {/* ✅ SAFETY FIX: Form wrapper prevents implicit submissions/reloads on Enter key */}
         <form 
           className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8"
           onSubmit={(e) => e.preventDefault()}
@@ -390,7 +420,7 @@ export default function SiteWizard() {
                 </label>
                 <div className="grid grid-cols-2 gap-4">
                   <button
-                    type="button" /* ✅ SAFETY FIX: Explicit button type */
+                    type="button"
                     onClick={() => setDistributionMethod('coefficient')}
                     className={`p-4 rounded-lg border-2 text-left transition-colors ${
                       distributionMethod === 'coefficient'
@@ -404,7 +434,7 @@ export default function SiteWizard() {
                     </p>
                   </button>
                   <button
-                    type="button" /* ✅ SAFETY FIX: Explicit button type */
+                    type="button"
                     onClick={() => setDistributionMethod('share_ratio')}
                     className={`p-4 rounded-lg border-2 text-left transition-colors ${
                       distributionMethod === 'share_ratio'
@@ -518,7 +548,7 @@ export default function SiteWizard() {
                           >
                             {cat}
                             <button
-                              type="button" /* ✅ SAFETY FIX: Explicit button type */
+                              type="button"
                               onClick={() => {
                                 setSelectedCategories(selectedCategories.filter(c => c !== cat));
                                 const newAmounts = { ...categoryAmounts };
@@ -542,7 +572,7 @@ export default function SiteWizard() {
                     onChange={(e) => setCustomCategory(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && customCategory.trim() && !selectedCategories.includes(customCategory.trim())) {
-                        e.preventDefault(); // ✅ Prevent form submission on Enter
+                        e.preventDefault();
                         setSelectedCategories([...selectedCategories, customCategory.trim()]);
                         setCustomCategory('');
                       }
@@ -551,7 +581,7 @@ export default function SiteWizard() {
                     placeholder="Add custom category..."
                   />
                   <button
-                    type="button" /* ✅ SAFETY FIX: Explicit button type */
+                    type="button"
                     onClick={() => {
                       if (customCategory.trim() && !selectedCategories.includes(customCategory.trim())) {
                         setSelectedCategories([...selectedCategories, customCategory.trim()]);
@@ -573,7 +603,7 @@ export default function SiteWizard() {
                       Budget Amounts per Category
                     </label>
                     <button
-                      type="button" /* ✅ SAFETY FIX: Explicit button type */
+                      type="button"
                       onClick={() => {
                         if (totalBudget > 0 && selectedCategories.length > 0) {
                           const perCategory = Math.floor(totalBudget / selectedCategories.length);
@@ -630,7 +660,7 @@ export default function SiteWizard() {
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold text-gray-900">Unit Types</h2>
                 <button
-                  type="button" /* ✅ SAFETY FIX: Explicit button type */
+                  type="button"
                   onClick={addUnitType}
                   className="flex items-center text-[#002561] hover:underline text-sm font-medium"
                 >
@@ -649,7 +679,7 @@ export default function SiteWizard() {
                       <span className="text-sm font-medium text-gray-500">Type #{index + 1}</span>
                       {unitTypes.length > 1 && (
                         <button
-                          type="button" /* ✅ SAFETY FIX: Explicit button type */
+                          type="button"
                           onClick={() => removeUnitType(index)}
                           className="text-red-500 hover:text-red-700"
                         >
@@ -711,16 +741,28 @@ export default function SiteWizard() {
                 <p className="text-sm text-gray-500 mb-4">
                   Columns: Unit Number, Block, Floor, Unit Type, Share Ratio, Owner Name, Phone, Email
                 </p>
-                <label className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg cursor-pointer hover:bg-[#003380] transition-colors">
-                  <Upload className="w-4 h-4 mr-2" />
-                  Select File
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                </label>
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <label className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg cursor-pointer hover:bg-[#003380] transition-colors">
+                    <Upload className="w-4 h-4 mr-2" />
+                    Select File
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  
+                  {/* ✅ NEW: Download Template Button */}
+                  <button
+                    type="button"
+                    onClick={downloadTemplate}
+                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
+                    Download Template
+                  </button>
+                </div>
               </div>
 
               {fileUploaded && (
@@ -733,7 +775,7 @@ export default function SiteWizard() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-500">Or add units manually</span>
                 <button
-                  type="button" /* ✅ SAFETY FIX: Explicit button type */
+                  type="button"
                   onClick={addManualUnit}
                   className="flex items-center text-[#002561] hover:underline text-sm font-medium"
                 >
@@ -797,7 +839,7 @@ export default function SiteWizard() {
                           </td>
                           <td className="px-4 py-3">
                             <button
-                              type="button" /* ✅ SAFETY FIX: Explicit button type */
+                              type="button"
                               onClick={() => removeUnit(index)}
                               className="text-red-500 hover:text-red-700"
                             >
@@ -816,7 +858,7 @@ export default function SiteWizard() {
           <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
             {currentStep > 1 ? (
               <button
-                type="button" /* ✅ SAFETY FIX: Explicit button type */
+                type="button"
                 onClick={handleBack}
                 className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900"
               >
@@ -825,7 +867,7 @@ export default function SiteWizard() {
               </button>
             ) : (
               <button
-                type="button" /* ✅ SAFETY FIX: Explicit button type */
+                type="button"
                 onClick={() => navigate('/dashboard')}
                 className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900"
               >
@@ -835,7 +877,7 @@ export default function SiteWizard() {
 
             {currentStep < 4 ? (
               <button
-                type="button" /* ✅ SAFETY FIX: Explicit button type */
+                type="button"
                 onClick={handleNext}
                 className="flex items-center px-6 py-2.5 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
               >
@@ -844,7 +886,7 @@ export default function SiteWizard() {
               </button>
             ) : (
               <button
-                type="button" /* ✅ SAFETY FIX: Explicit button type */
+                type="button"
                 onClick={handleComplete}
                 disabled={loading}
                 className="flex items-center px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
