@@ -590,6 +590,7 @@ export default function FiscalPeriods() {
 // Important: Ensure you copy the sub-components from your previous file to the bottom of this one. 
 // They are required for the code to run but were unchanged in this logic fix.
 // (I omitted them here for brevity, but they must be present in your final file).
+
 // ... SUB COMPONENTS ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
