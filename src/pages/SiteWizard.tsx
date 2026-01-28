@@ -306,7 +306,11 @@ export default function SiteWizard() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+        {/* ✅ SAFETY FIX: Form wrapper prevents implicit submissions/reloads on Enter key */}
+        <form 
+          className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8"
+          onSubmit={(e) => e.preventDefault()}
+        >
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg">
               {error}
@@ -386,7 +390,7 @@ export default function SiteWizard() {
                 </label>
                 <div className="grid grid-cols-2 gap-4">
                   <button
-                    type="button"
+                    type="button" /* ✅ SAFETY FIX: Explicit button type */
                     onClick={() => setDistributionMethod('coefficient')}
                     className={`p-4 rounded-lg border-2 text-left transition-colors ${
                       distributionMethod === 'coefficient'
@@ -400,7 +404,7 @@ export default function SiteWizard() {
                     </p>
                   </button>
                   <button
-                    type="button"
+                    type="button" /* ✅ SAFETY FIX: Explicit button type */
                     onClick={() => setDistributionMethod('share_ratio')}
                     className={`p-4 rounded-lg border-2 text-left transition-colors ${
                       distributionMethod === 'share_ratio'
@@ -514,7 +518,7 @@ export default function SiteWizard() {
                           >
                             {cat}
                             <button
-                              type="button"
+                              type="button" /* ✅ SAFETY FIX: Explicit button type */
                               onClick={() => {
                                 setSelectedCategories(selectedCategories.filter(c => c !== cat));
                                 const newAmounts = { ...categoryAmounts };
@@ -538,6 +542,7 @@ export default function SiteWizard() {
                     onChange={(e) => setCustomCategory(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && customCategory.trim() && !selectedCategories.includes(customCategory.trim())) {
+                        e.preventDefault(); // ✅ Prevent form submission on Enter
                         setSelectedCategories([...selectedCategories, customCategory.trim()]);
                         setCustomCategory('');
                       }
@@ -546,7 +551,7 @@ export default function SiteWizard() {
                     placeholder="Add custom category..."
                   />
                   <button
-                    type="button"
+                    type="button" /* ✅ SAFETY FIX: Explicit button type */
                     onClick={() => {
                       if (customCategory.trim() && !selectedCategories.includes(customCategory.trim())) {
                         setSelectedCategories([...selectedCategories, customCategory.trim()]);
@@ -568,7 +573,7 @@ export default function SiteWizard() {
                       Budget Amounts per Category
                     </label>
                     <button
-                      type="button"
+                      type="button" /* ✅ SAFETY FIX: Explicit button type */
                       onClick={() => {
                         if (totalBudget > 0 && selectedCategories.length > 0) {
                           const perCategory = Math.floor(totalBudget / selectedCategories.length);
@@ -625,6 +630,7 @@ export default function SiteWizard() {
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold text-gray-900">Unit Types</h2>
                 <button
+                  type="button" /* ✅ SAFETY FIX: Explicit button type */
                   onClick={addUnitType}
                   className="flex items-center text-[#002561] hover:underline text-sm font-medium"
                 >
@@ -643,6 +649,7 @@ export default function SiteWizard() {
                       <span className="text-sm font-medium text-gray-500">Type #{index + 1}</span>
                       {unitTypes.length > 1 && (
                         <button
+                          type="button" /* ✅ SAFETY FIX: Explicit button type */
                           onClick={() => removeUnitType(index)}
                           className="text-red-500 hover:text-red-700"
                         >
@@ -726,6 +733,7 @@ export default function SiteWizard() {
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-500">Or add units manually</span>
                 <button
+                  type="button" /* ✅ SAFETY FIX: Explicit button type */
                   onClick={addManualUnit}
                   className="flex items-center text-[#002561] hover:underline text-sm font-medium"
                 >
@@ -789,6 +797,7 @@ export default function SiteWizard() {
                           </td>
                           <td className="px-4 py-3">
                             <button
+                              type="button" /* ✅ SAFETY FIX: Explicit button type */
                               onClick={() => removeUnit(index)}
                               className="text-red-500 hover:text-red-700"
                             >
@@ -807,6 +816,7 @@ export default function SiteWizard() {
           <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
             {currentStep > 1 ? (
               <button
+                type="button" /* ✅ SAFETY FIX: Explicit button type */
                 onClick={handleBack}
                 className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900"
               >
@@ -815,6 +825,7 @@ export default function SiteWizard() {
               </button>
             ) : (
               <button
+                type="button" /* ✅ SAFETY FIX: Explicit button type */
                 onClick={() => navigate('/dashboard')}
                 className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900"
               >
@@ -824,6 +835,7 @@ export default function SiteWizard() {
 
             {currentStep < 4 ? (
               <button
+                type="button" /* ✅ SAFETY FIX: Explicit button type */
                 onClick={handleNext}
                 className="flex items-center px-6 py-2.5 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
               >
@@ -832,6 +844,7 @@ export default function SiteWizard() {
               </button>
             ) : (
               <button
+                type="button" /* ✅ SAFETY FIX: Explicit button type */
                 onClick={handleComplete}
                 disabled={loading}
                 className="flex items-center px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
@@ -850,7 +863,7 @@ export default function SiteWizard() {
               </button>
             )}
           </div>
-        </div>
+        </form>
       </div>
     </div>
   );
