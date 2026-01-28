@@ -8,9 +8,9 @@ import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/databas
 
 interface ReportLine {
   category: string;
-  planned: number; // Budget
-  actual: number;  // Realized
-  difference: number; // Variance
+  planned: number;
+  actual: number;
+  difference: number;
   percentage: number;
 }
 
@@ -84,10 +84,9 @@ export default function BudgetVsActual() {
         .eq('is_active', true)
     ]);
 
-    // Calculate Opening Balance
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
-      const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
-      return sum + (Number(acc.initial_balance) * rate);
+        const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
+        return sum + (Number(acc.initial_balance) * rate);
     }, 0);
     setOpeningBalance(totalOpening);
 
@@ -95,114 +94,82 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ NEW LOGIC: Smart Matching & Strict Separation
-  const calculateReportLines = (budgetItems: BudgetCategory[], ledgerEntries: LedgerEntry[]) => {
+  // ✅ FIXED LOGIC: Ledger Behavior First, Smart Naming Second
+  const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
     
-    // --- 1. PREPARE DATA ---
-    
-    // Create a Set of all unique category names (from both Budget and Ledger)
-    const allCategoryNames = new Set<string>();
-    
-    // Add all Budget categories first (This ensures we see items with 0 actuals)
-    budgetItems.forEach(b => allCategoryNames.add(b.category_name));
-    
-    // Add all Ledger categories (excluding Transfers)
-    ledgerEntries.forEach(e => {
-        if (e.category !== 'Transfer') allCategoryNames.add(e.category);
+    // 1. Collect ALL unique categories
+    const allCategories = new Set<string>();
+    categories.forEach(c => allCategories.add(c.category_name));
+    entries.forEach(e => {
+        if (e.category !== 'Transfer') allCategories.add(e.category);
     });
 
     const incomeLinesTemp: ReportLine[] = [];
     const expenseLinesTemp: ReportLine[] = [];
 
-    // --- 2. HELPERS ---
+    // Helper: Normalize string for comparison
+    const normalize = (str: string) => str.trim().toLowerCase();
 
-    // Clean up strings to help match "Communal Electric" with "Communual Electric Payments"
-    const cleanString = (str: string) => {
-        return str.toLowerCase()
-            .replace('payments', '') // Remove common suffixes
-            .replace('payment', '')
-            .replace('fee', '')
-            .replace('communual', 'communal') // Fix the specific typo you mentioned
-            .trim();
-    };
+    // Helper: Get budget item regardless of case
+    const getBudget = (name: string) => categories.find(c => normalize(c.category_name) === normalize(name));
 
-    // Find the budget amount for a given category name (using fuzzy match)
-    const findBudgetAmount = (catName: string) => {
-        const cleanCat = cleanString(catName);
+    // Iterate through every category found in the system
+    Array.from(allCategoryNames).forEach(catName => {
+        const catLower = normalize(catName);
         
-        // Try exact match first
-        let match = budgetItems.find(b => b.category_name === catName);
+        // Prevent duplicates
+        const exists = [...incomeLinesTemp, ...expenseLinesTemp].some(l => normalize(l.category) === catLower);
+        if (exists) return;
+
+        // --- STEP 1: CALCULATE ACTUALS FROM LEDGER ---
+        const relevantEntries = entries.filter(e => normalize(e.category) === catLower && e.category !== 'Transfer');
         
-        // Try fuzzy match if exact failed
-        if (!match) {
-            match = budgetItems.find(b => cleanString(b.category_name) === cleanCat);
-        }
-        
-        // Try "Contains" match (e.g. "Electric" inside "Communal Electric")
-        if (!match) {
-            match = budgetItems.find(b => cleanString(b.category_name).includes(cleanCat) || cleanCat.includes(cleanString(b.category_name)));
-        }
-
-        return match ? Number(match.planned_amount) : 0;
-    };
-
-    // Calculate actuals for a category
-    const calculateActuals = (catName: string) => {
-        const cleanCat = cleanString(catName);
-
-        // Filter entries that match this category
-        const relevantEntries = ledgerEntries.filter(e => {
-            if (e.category === 'Transfer') return false;
-            const cleanEntryCat = cleanString(e.category);
-            return cleanEntryCat === cleanCat || cleanEntryCat.includes(cleanCat) || cleanCat.includes(cleanEntryCat);
-        });
-
-        const inc = relevantEntries
+        const totalIncomeEntries = relevantEntries
             .filter(e => e.entry_type === 'income')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-            
-        const exp = relevantEntries
+
+        const totalExpenseEntries = relevantEntries
             .filter(e => e.entry_type === 'expense')
             .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
-        return { inc, exp };
-    };
+        // --- STEP 2: DECIDE LANE (INCOME OR EXPENSE?) ---
+        let isIncomeCategory = false;
 
-    // --- 3. PROCESS CATEGORIES ---
+        if (totalIncomeEntries > 0 || totalExpenseEntries > 0) {
+            // RULE A: "Behavior" - If we collected more than we spent, it's Income.
+            if (totalIncomeEntries >= totalExpenseEntries) {
+                isIncomeCategory = true; 
+            } else {
+                isIncomeCategory = false;
+            }
+        } else {
+            // RULE B: "Naming Fallback" (If no ledger data exists yet)
+            // Strict check for Income keywords.
+            // "Maintenance" is NOT enough (could be Pool Maintenance).
+            // "Maintenance Fee" IS enough.
+            if (
+                catLower.includes('income') || 
+                catLower.includes('revenue') || 
+                catName === 'Dues' || 
+                catLower === 'aidat' ||
+                (catLower.includes('maintenance') && catLower.includes('fee')) ||
+                catLower.includes('extra fee')
+            ) {
+                isIncomeCategory = true;
+            } else {
+                // Everything else defaults to Expense (Electric, Water, Internet, Pool Maintenance)
+                isIncomeCategory = false; 
+            }
+        }
 
-    // We keep track of processed categories to avoid duplicates due to fuzzy matching
-    const processedNames = new Set<string>();
-
-    Array.from(allCategoryNames).forEach(catName => {
-        const cleanName = cleanString(catName);
-        if (processedNames.has(cleanName)) return; // Skip if already handled
-        processedNames.add(cleanName);
-
-        // -- DECISION TIME: Income or Expense? --
-        // STRICT RULE: Only specific words allow entry into the Income Table.
-        // Everything else is forced into Expense.
-        const catNameLower = catName.toLowerCase();
-        
-        const isStrictlyIncome = 
-            (catNameLower.includes('maintenance') || 
-             catNameLower.includes('dues') || 
-             catNameLower.includes('aidat') || 
-             catNameLower.includes('pool income')) 
-            && 
-            !catNameLower.includes('repair') && // "Elevator Maintenance" is expense
-            !catNameLower.includes('service');  // "Maintenance Service" is expense
-
-        // Get Budget & Actuals
-        const planned = findBudgetAmount(catName);
-        const { inc, exp } = calculateActuals(catName);
-
-        // Find a nice display name (Prefer Budget name, fallback to Ledger name)
-        const budgetItem = budgetItems.find(b => cleanString(b.category_name) === cleanName);
+        // --- STEP 3: PREPARE DATA ---
+        const budgetItem = getBudget(catName);
+        const planned = budgetItem ? Number(budgetItem.planned_amount) : 0;
         const displayName = budgetItem ? budgetItem.category_name : catName;
 
-        if (isStrictlyIncome) {
-            // INCOME LOGIC: Actual = (Collections - Refunds)
-            const actual = inc - exp;
+        if (isIncomeCategory) {
+            // INCOME LANE: (Collections - Refunds)
+            const actual = totalIncomeEntries - totalExpenseEntries;
             
             if (planned > 0 || Math.abs(actual) > 0) {
                 incomeLinesTemp.push({
@@ -214,8 +181,8 @@ export default function BudgetVsActual() {
                 });
             }
         } else {
-            // EXPENSE LOGIC: Actual = (Spending - Rebates)
-            const actual = exp - inc;
+            // EXPENSE LANE: (Spending - Rebates)
+            const actual = totalExpenseEntries - totalIncomeEntries;
 
             if (planned > 0 || Math.abs(actual) > 0) {
                 expenseLinesTemp.push({
@@ -229,7 +196,7 @@ export default function BudgetVsActual() {
         }
     });
 
-    // 4. Sort (Largest Budget First)
+    // 4. Sort
     incomeLinesTemp.sort((a, b) => b.planned - a.planned);
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
@@ -312,6 +279,7 @@ export default function BudgetVsActual() {
               Budget vs Actual Comparison Report
             </h2>
             <h3 className="text-xl font-semibold text-gray-700 mb-3">{currentSite?.name}</h3>
+            {/* Find active period safely */}
             {fiscalPeriods.find(p => p.id === selectedPeriodId) && (
               <div className="flex items-center justify-center gap-2 text-gray-600">
                 <Calendar className="w-4 h-4" />
@@ -331,7 +299,7 @@ export default function BudgetVsActual() {
               <div>
                 <p className="text-sm text-white/70 mb-1">Opening Cash Balance</p>
                 <p className="text-2xl font-bold">{formatCurrency(openingBalance)}</p>
-                <p className="text-xs text-white/50">Initial Accounts State</p>
+                <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
               </div>
               <div>
                 <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
