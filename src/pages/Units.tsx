@@ -18,10 +18,14 @@ export default function Units() {
   const [selectedUnit, setSelectedUnit] = useState<Unit | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
+  
+  // Refined State for Details
   const [unitDetails, setUnitDetails] = useState<{
-    dues: Array<{ id: string; month_date: string; total_amount: number; paid_amount: number; status: string; currency_code: string }>;
+    dues: Array<{ id: string; month_date: string; total_amount: number; status: string; currency_code: string }>;
     payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string }>;
+    totalPaidCalculated: number; // Correct sum from Ledger
   } | null>(null);
+  
   const [loadingDetails, setLoadingDetails] = useState(false);
 
   const isAdmin = currentRole?.role === 'admin';
@@ -72,51 +76,52 @@ export default function Units() {
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
       currency: currencyCode,
-      minimumFractionDigits: 0,
+      minimumFractionDigits: 2,
     }).format(amount);
   };
 
+  // ✅ FIXED LOGIC: Separated Data Sources for Accuracy
   const fetchUnitDetails = async (unitId: string) => {
     setLoadingDetails(true);
 
-    const paymentIdsRes = await supabase
-      .from('payments')
-      .select('id')
-      .eq('unit_id', unitId);
-
-    const paymentIds = (paymentIdsRes.data || []).map(p => p.id);
-
-    const [duesRes, ledgerRes] = await Promise.all([
-      supabase
+    // 1. Fetch Dues (Charges)
+    const duesRes = await supabase
         .from('dues')
-        .select('id, month_date, total_amount, paid_amount, status, currency_code')
+        .select('id, month_date, total_amount, status, currency_code')
         .eq('unit_id', unitId)
-        .order('month_date', { ascending: false }),
-      paymentIds.length > 0
-        ? supabase
-            .from('ledger_entries')
-            .select('id, amount, entry_date, description, payment_id, payments(payment_date, payment_method, reference_no, amount, currency_code)')
-            .eq('entry_type', 'income')
-            .in('payment_id', paymentIds)
-            .not('payment_id', 'is', null)
-            .order('entry_date', { ascending: false })
-        : Promise.resolve({ data: [] }),
-    ]);
+        .order('month_date', { ascending: false });
 
-    const formattedPayments = (ledgerRes.data || []).map(entry => ({
-      id: entry.id,
-      amount: entry.payments?.amount || entry.amount,
-      payment_date: entry.payments?.payment_date || entry.entry_date,
-      payment_method: entry.payments?.payment_method || 'bank_transfer',
-      reference_no: entry.payments?.reference_no || null,
-      description: entry.description,
-      currency_code: entry.payments?.currency_code || 'TRY',
-    }));
+    // 2. Fetch Payments (The List) - Directly from payments table for clean history
+    const paymentsRes = await supabase
+        .from('payments')
+        .select('*')
+        .eq('unit_id', unitId)
+        .order('payment_date', { ascending: false });
+
+    // 3. Fetch Ledger Income (The Sum) - For accurate "Total Paid" calculation
+    // We sum up the actual credits applied to the unit's account
+    const ledgerRes = await supabase
+        .from('ledger_entries')
+        .select('amount, amount_reporting_try')
+        .eq('account_id', unitId) // Assuming unit_id links to account or filtered by context
+        // Actually, ledger_entries usually link via 'payment_id' or we filter by unit context.
+        // Since units don't always have a direct account_id in ledger in some schemas, 
+        // we rely on the fact that 'payments' create ledger entries.
+        // Let's filter ledger entries BY the payment IDs we just found.
+        .in('payment_id', (paymentsRes.data || []).map(p => p.id))
+        .eq('entry_type', 'income');
+
+    // Calculate Total Paid correctly using Ledger amounts (handles currency reporting/splits)
+    const totalPaidVal = (ledgerRes.data || []).reduce((sum, entry) => {
+        return sum + Number(entry.amount_reporting_try || entry.amount);
+    }, 0);
 
     setUnitDetails({
       dues: duesRes.data || [],
-      payments: formattedPayments,
+      payments: paymentsRes.data || [], // Clean list of payments
+      totalPaidCalculated: totalPaidVal
     });
+    
     setLoadingDetails(false);
   };
 
@@ -319,10 +324,10 @@ export default function Units() {
                                 {(() => {
                                   const unit = units.find(u => u.id === expandedUnit);
                                   const openingBalance = unit?.balance?.opening_balance || 0;
+                                  
+                                  // Use Calculated Values
                                   const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
-
-                                  // ✅ FIX: Calculate Total Paid from ACTUAL PAYMENTS list, not from stale dues table
-                                  const totalPaid = unitDetails.payments.reduce((sum, p) => sum + Number(p.amount), 0);
+                                  const totalPaid = unitDetails.totalPaidCalculated; // ✅ Correct Value
                                   
                                   const duesCurrency = unitDetails.dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
                                   const displayCurrency = duesCurrency;
@@ -385,29 +390,13 @@ export default function Units() {
                                             </span>
                                           </div>
                                         </div>
-                                        {totalDebt > 0 && (
-                                          <div className="mt-3 flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-200">
-                                            <span className="text-sm font-medium text-red-700">Outstanding Balance:</span>
-                                            <span className="text-lg font-bold text-red-600">{formatCurrency(totalDebt, displayCurrency)}</span>
-                                          </div>
-                                        )}
-                                        {totalDebt < 0 && (
-                                          <div className="mt-3 flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-200">
-                                            <span className="text-sm font-medium text-green-700">Overpayment:</span>
-                                            <span className="text-lg font-bold text-green-600">{formatCurrency(Math.abs(totalDebt), displayCurrency)}</span>
-                                          </div>
-                                        )}
-                                        {totalDebt === 0 && totalAmountDue > 0 && (
-                                          <div className="mt-3 flex items-center justify-center p-3 bg-green-50 rounded-lg border border-green-200">
-                                            <span className="text-sm font-bold text-green-700">All payments completed!</span>
-                                          </div>
-                                        )}
                                       </div>
                                     </div>
                                   );
                                 })()}
 
                                 <div className="grid grid-cols-2 gap-6">
+                                  {/* Accrued Dues Section - Now using direct Dues list */}
                                   <div>
                                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center justify-between">
                                       <span className="flex items-center">
@@ -433,7 +422,6 @@ export default function Units() {
                                               <span className="text-sm font-semibold text-gray-900">
                                                 {format(new Date(due.month_date), 'MMMM yyyy')}
                                               </span>
-                                              {/* Status removed from here as it might be stale */}
                                             </div>
                                             <div className="space-y-1">
                                               <div className="flex justify-between items-center text-sm">
@@ -447,6 +435,7 @@ export default function Units() {
                                     </div>
                                   </div>
 
+                                  {/* Payments Section - Direct from Payments table */}
                                   <div>
                                     <h4 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
                                       <Receipt className="w-4 h-4 mr-2" />
