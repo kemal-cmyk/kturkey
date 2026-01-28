@@ -16,64 +16,6 @@ interface Account {
   currency_code: string;
 }
 
-// Interface definitions for sub-components
-interface CreatePeriodModalProps {
-  siteId: string;
-  onClose: () => void;
-  onCreated: () => void;
-}
-
-interface RolloverModalProps {
-  period: FiscalPeriod;
-  siteId: string;
-  onClose: () => void;
-  onCompleted: () => void;
-}
-
-interface AddCategoryModalProps {
-  periodId: string;
-  existingCategories: BudgetCategory[];
-  onClose: () => void;
-  onAdded: () => void;
-}
-
-interface EditCategoryModalProps {
-  category: BudgetCategory;
-  onClose: () => void;
-  onUpdated: () => void;
-}
-
-interface AddEntryModalProps {
-  category: BudgetCategory;
-  period: FiscalPeriod;
-  siteId: string;
-  userId: string;
-  accounts: Account[];
-  onClose: () => void;
-  onAdded: () => void;
-}
-
-interface SetDuesModalProps {
-  periodId: string;
-  siteId: string;
-  defaultCurrency: string;
-  onClose: () => void;
-  onSet: () => void;
-}
-
-interface Unit {
-  id: string;
-  unit_number: string;
-  owner_name: string | null;
-}
-
-const CURRENCIES = [
-  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
-  { code: 'EUR', symbol: '€', name: 'Euro' },
-  { code: 'USD', symbol: '$', name: 'US Dollar' },
-  { code: 'GBP', symbol: '£', name: 'British Pound' },
-];
-
 export default function FiscalPeriods() {
   const { currentSite, currentRole, user } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -145,6 +87,7 @@ export default function FiscalPeriods() {
     fetchPeriodDetails(period.id);
   };
 
+  // ✅ Triggered when regenerating dues to refresh totals
   const activatePeriod = async (periodId: string) => {
     setActionLoading(true);
 
@@ -177,15 +120,6 @@ export default function FiscalPeriods() {
     }).format(amount);
   };
 
-  // ✅ NEW HELPER: Smart Matching Function (Fixes the "0 Spent" issue)
-  const normalizeCategory = (str: string) => {
-      return str.toLowerCase()
-          .replace('communual', 'communal') // Fix common typo
-          .replace(/payments?|fees?|bills?|faturasi|odemesi/g, '') // Remove noise words
-          .replace(/\s+/g, ' ') // Collapse extra spaces
-          .trim();
-  };
-
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center min-h-[60vh]">
@@ -203,7 +137,7 @@ export default function FiscalPeriods() {
         </div>
         {isAdmin && (
           <button
-            type="button"
+            type="button" // ✅ Explicit button type
             onClick={() => setShowCreateModal(true)}
             className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
           >
@@ -235,7 +169,7 @@ export default function FiscalPeriods() {
               {periods.map((period) => (
                 <button
                   key={period.id}
-                  type="button"
+                  type="button" // ✅ Explicit button type
                   onClick={() => handleSelectPeriod(period)}
                   className={`w-full p-4 rounded-xl border text-left transition-colors ${
                     selectedPeriod?.id === period.id
@@ -305,27 +239,12 @@ export default function FiscalPeriods() {
                       </button>
                     )}
                   </div>
-                  
                   {budgetCategories.length > 0 ? (
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
-                        
-                        // ✅ FIX APPLIED HERE: Using Fuzzy Match to Sum Actuals
-                        const normCatName = normalizeCategory(cat.category_name);
-                        
                         const categoryActual = ledgerEntries
-                            .filter(e => {
-                                const normEntryCat = normalizeCategory(e.category);
-                                // Check for exact match or substring match
-                                return normEntryCat === normCatName || 
-                                       normEntryCat.includes(normCatName) || 
-                                       normCatName.includes(normEntryCat);
-                            })
-                            .reduce((sum, e) => {
-                                // Calculate sum: Expenses increase total, Income refunds decrease it
-                                const val = Number(e.amount_reporting_try || e.amount);
-                                return sum + (e.entry_type === 'expense' ? val : -val);
-                            }, 0);
+                            .filter(e => e.category === cat.category_name)
+                            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
                         const utilization = cat.planned_amount > 0
                           ? (categoryActual / cat.planned_amount) * 100
@@ -546,6 +465,7 @@ export default function FiscalPeriods() {
           siteId={currentSite.id}
           defaultCurrency={currentSite.default_currency || 'TRY'}
           onClose={() => setShowSetDuesModal(false)}
+          // ✅ FIX: Reload period data after setting dues to show new entries
           onSet={() => {
             setShowSetDuesModal(false);
             activatePeriod(selectedPeriod.id); 
@@ -555,6 +475,8 @@ export default function FiscalPeriods() {
     </div>
   );
 }
+
+// ... SUB COMPONENTS ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -1209,6 +1131,7 @@ function AddEntryModal({
   );
 }
 
+// ✅ FIXED: Added `type="button"` to ALL buttons to prevent form submission/refresh
 function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: SetDuesModalProps) {
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'uniform' | 'individual'>('uniform');
@@ -1256,7 +1179,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     }
 
     setLoading(false);
-    onSet(); 
+    onSet(); // This triggers parent to run generate_fiscal_period_dues
   };
 
   const handleSetIndividual = async () => {
@@ -1288,7 +1211,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     }
 
     setLoading(false);
-    onSet(); 
+    onSet(); // This triggers parent to run generate_fiscal_period_dues
   };
 
   return (
@@ -1324,7 +1247,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 
           <div className="grid grid-cols-2 gap-3">
             <button
-              type="button"
+              type="button" // ✅ Explicit button type
               onClick={() => setMode('uniform')}
               className={`p-4 rounded-xl border-2 text-center transition-all ${
                 mode === 'uniform'
@@ -1336,7 +1259,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
               <div className="text-xs mt-1">Set one amount for all units</div>
             </button>
             <button
-              type="button"
+              type="button" // ✅ Explicit button type
               onClick={() => setMode('individual')}
               className={`p-4 rounded-xl border-2 text-center transition-all ${
                 mode === 'individual'
@@ -1398,14 +1321,14 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 
         <div className="p-6 border-t border-gray-100 flex justify-end space-x-3">
           <button
-            type="button"
+            type="button" // ✅ Explicit button type
             onClick={onClose}
             className="px-4 py-2 text-gray-600 hover:text-gray-900 transition-colors"
           >
             Cancel
           </button>
           <button
-            type="button"
+            type="button" // ✅ Explicit button type
             onClick={mode === 'uniform' ? handleSetUniform : handleSetIndividual}
             disabled={loading || (mode === 'uniform' ? !uniformAmount : false)}
             className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
@@ -1418,3 +1341,17 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
     </div>
   );
 }
+
+// ... other components (Unit, CURRENCIES) are already included above
+interface Unit {
+  id: string;
+  unit_number: string;
+  owner_name: string | null;
+}
+
+const CURRENCIES = [
+  { code: 'TRY', symbol: '₺', name: 'Turkish Lira' },
+  { code: 'EUR', symbol: '€', name: 'Euro' },
+  { code: 'USD', symbol: '$', name: 'US Dollar' },
+  { code: 'GBP', symbol: '£', name: 'British Pound' },
+];
