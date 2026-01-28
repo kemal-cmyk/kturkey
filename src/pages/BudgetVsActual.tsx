@@ -8,22 +8,19 @@ import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/databas
 
 interface ReportLine {
   category: string;
-  planned: number;
-  actual: number;
-  difference: number;
+  planned: number; // Budget
+  actual: number;  // Realized
+  difference: number; // Variance
   percentage: number;
 }
 
 export default function BudgetVsActual() {
   const { currentSite, currentRole } = useAuth();
-  const { canAccess } = usePermissions(); 
+  const { canAccess } = usePermissions();
 
   const [loading, setLoading] = useState(true);
-  const [activePeriod, setActivePeriod] = useState<FiscalPeriod | null>(null);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('');
-  const [budgetCategories, setBudgetCategories] = useState<BudgetCategory[]>([]);
-  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
   const [incomeLines, setIncomeLines] = useState<ReportLine[]>([]);
   const [expenseLines, setExpenseLines] = useState<ReportLine[]>([]);
   const [openingBalance, setOpeningBalance] = useState(0);
@@ -58,7 +55,6 @@ export default function BudgetVsActual() {
 
     const active = periods?.find(p => p.status === 'active');
     if (active) {
-      setActivePeriod(active);
       setSelectedPeriodId(active.id);
     } else if (periods && periods.length > 0) {
       setSelectedPeriodId(periods[0].id);
@@ -88,12 +84,10 @@ export default function BudgetVsActual() {
         .eq('is_active', true)
     ]);
 
-    setBudgetCategories(categoriesRes.data || []);
-    setLedgerEntries(entriesRes.data || []);
-
+    // Calculate Opening Balance
     const totalOpening = (accountsRes.data || []).reduce((sum, acc) => {
-        const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
-        return sum + (Number(acc.initial_balance) * rate);
+      const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
+      return sum + (Number(acc.initial_balance) * rate);
     }, 0);
     setOpeningBalance(totalOpening);
 
@@ -101,61 +95,67 @@ export default function BudgetVsActual() {
     setLoading(false);
   };
 
-  // ✅ FIXED LOGIC: Stricter Keyword Matching
+  // ✅ CORE LOGIC: Strict Category Separation
   const calculateReportLines = (categories: BudgetCategory[], entries: LedgerEntry[]) => {
-    console.log("--- RECALCULATING REPORT LINES (New Logic) ---");
+    
+    // 1. Define strict keywords for Income Categories
+    // If a category has these words, it goes to Income Table. Everything else goes to Expense Table.
+    const INCOME_KEYWORDS = ['maintenance', 'dues', 'aidat', 'extra fee', 'income', 'revenue', 'interest'];
 
-    // 1. Identify all unique categories
-    const allCategories = new Set<string>();
-    categories.forEach(c => allCategories.add(c.category_name));
+    // 2. Normalize and Collect all unique Categories
+    const allCategoryNames = new Set<string>();
+    categories.forEach(c => allCategoryNames.add(c.category_name));
     entries.forEach(e => {
-        if (e.category !== 'Transfer') allCategories.add(e.category);
+        if (e.category !== 'Transfer') allCategoryNames.add(e.category);
     });
 
     const incomeLinesTemp: ReportLine[] = [];
     const expenseLinesTemp: ReportLine[] = [];
 
-    // 2. STRICTER Keywords for Income
-    // "Maintenance Fee" is income. "Elevator Maintenance" is expense.
-    const INCOME_KEYWORDS = [
-        'maintenance fee', 'dues', 'aidat', 'extra fee', 
-        'income', 'revenue', 'interest', 'late fee'
-    ];
+    // Helper to sum ledger entries safely
+    const getSum = (catName: string, type: 'income' | 'expense') => {
+        return entries
+            .filter(e => 
+                e.category.trim().toLowerCase() === catName.trim().toLowerCase() && 
+                e.entry_type === type
+            )
+            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+    };
 
-    allCategories.forEach(catName => {
+    // Helper to find budget safely
+    const getBudget = (catName: string) => {
+        return categories.find(c => c.category_name.trim().toLowerCase() === catName.trim().toLowerCase());
+    };
+
+    // 3. Process Each Category
+    Array.from(allCategoryNames).forEach(catName => {
         const catNameLower = catName.toLowerCase();
         
-        // 3. DECIDE THE LANE
-        // Check if it matches an Income Keyword
-        let isIncomeCategory = INCOME_KEYWORDS.some(k => catNameLower.includes(k));
-        
-        // Safety Check: If it says "repair", "service", or "cleaning", it is EXPENSE, even if it says "fee"
-        if (catNameLower.includes('repair') || catNameLower.includes('cleaning') || catNameLower.includes('security')) {
-            isIncomeCategory = false;
-        }
+        // Prevent duplicates (e.g. "Electric" vs "electric")
+        // We skip if we already processed this name in a case-insensitive way
+        const alreadyAdded = [...incomeLinesTemp, ...expenseLinesTemp].some(l => l.category.toLowerCase() === catNameLower);
+        if (alreadyAdded) return;
 
-        // 4. Calculate Net Actuals (Converted to TRY)
-        const incomeSum = entries
-            .filter(e => e.category === catName && e.entry_type === 'income')
-            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
+        // Is this an Income Category?
+        const isIncomeCategory = INCOME_KEYWORDS.some(k => catNameLower.includes(k));
 
-        const expenseSum = entries
-            .filter(e => e.category === catName && e.entry_type === 'expense')
-            .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
-
-        // Get Budget Target
-        const budgetItem = categories.find(c => c.category_name === catName);
+        // Get Data
+        const incomeSum = getSum(catName, 'income');
+        const expenseSum = getSum(catName, 'expense');
+        const budgetItem = getBudget(catName);
         const plannedAmount = budgetItem ? Number(budgetItem.planned_amount) : 0;
+        
+        // Use the cleanest name available
+        const displayName = budgetItem ? budgetItem.category_name : catName;
 
         if (isIncomeCategory) {
-            console.log(`[INCOME] ${catName} | Budget: ${plannedAmount} | In: ${incomeSum} | Out: ${expenseSum}`);
-            
-            // Net Actual for Income = (Money In) - (Refunds)
+            // === INCOME LANE ===
+            // Actual = (Money In) - (Money Out/Refunds)
             const netActual = incomeSum - expenseSum; 
             
             if (plannedAmount > 0 || Math.abs(netActual) > 0) {
                 incomeLinesTemp.push({
-                    category: catName,
+                    category: displayName,
                     planned: plannedAmount, 
                     actual: netActual,      
                     difference: netActual - plannedAmount, 
@@ -163,14 +163,13 @@ export default function BudgetVsActual() {
                 });
             }
         } else {
-            console.log(`[EXPENSE] ${catName} | Budget: ${plannedAmount} | In: ${incomeSum} | Out: ${expenseSum}`);
-
-            // Net Actual for Expense = (Money Out) - (Rebates)
+            // === EXPENSE LANE ===
+            // Actual = (Money Out) - (Money In/Rebates)
             const netActual = expenseSum - incomeSum; 
 
             if (plannedAmount > 0 || Math.abs(netActual) > 0) {
                 expenseLinesTemp.push({
-                    category: catName,
+                    category: displayName,
                     planned: plannedAmount, 
                     actual: netActual,      
                     difference: plannedAmount - netActual, 
@@ -180,7 +179,7 @@ export default function BudgetVsActual() {
         }
     });
 
-    // 5. Sort Lines
+    // 4. Sort
     incomeLinesTemp.sort((a, b) => b.planned - a.planned); 
     expenseLinesTemp.sort((a, b) => b.planned - a.planned);
 
@@ -197,6 +196,7 @@ export default function BudgetVsActual() {
     }).format(amount);
   };
 
+  // Totals
   const totalIncomePlanned = incomeLines.reduce((sum, line) => sum + line.planned, 0);
   const totalIncomeActual = incomeLines.reduce((sum, line) => sum + line.actual, 0);
   const totalIncomeDifference = totalIncomeActual - totalIncomePlanned;
@@ -209,7 +209,7 @@ export default function BudgetVsActual() {
   const netActual = totalIncomeActual - totalExpenseActual;
   const netDifference = netActual - netPlanned;
 
-  const projectedClosingActual = openingBalance + netActual;
+  const projectedClosing = openingBalance + netActual;
 
   const selectedPeriod = fiscalPeriods.find(p => p.id === selectedPeriodId);
 
@@ -226,7 +226,7 @@ export default function BudgetVsActual() {
       <div className="flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Budget vs Actual Report</h1>
-          <p className="text-gray-600 mt-1">Compare planned budget with actual performance</p>
+          <p className="text-gray-600 mt-1">Compare accrued income & expenses with actual performance</p>
         </div>
         <button
           onClick={handlePrint}
@@ -283,21 +283,21 @@ export default function BudgetVsActual() {
               <div>
                 <p className="text-sm text-white/70 mb-1">Opening Cash Balance</p>
                 <p className="text-2xl font-bold">{formatCurrency(openingBalance)}</p>
-                <p className="text-xs text-white/50">Initial Accounts State (Converted to TRY)</p>
+                <p className="text-xs text-white/50">Starting balance (Converted to TRY)</p>
               </div>
               <div>
                 <p className="text-sm text-white/70 mb-1">Net Period Change (Actual)</p>
                 <p className={`text-2xl font-bold ${netActual >= 0 ? 'text-green-300' : 'text-red-300'}`}>
                   {netActual > 0 ? '+' : ''}{formatCurrency(netActual)}
                 </p>
-                <p className="text-xs text-white/50">Income - Expenses (Converted to TRY)</p>
+                <p className="text-xs text-white/50">Actual Income - Actual Expenses</p>
               </div>
               <div className="pt-4 md:pt-0 md:border-l md:border-white/20 md:pl-8">
-                <p className="text-sm text-white/70 mb-1">Estimated Closing Balance</p>
+                <p className="text-sm text-white/70 mb-1">Projected Closing Balance</p>
                 <p className="text-3xl font-bold text-white">
-                  {formatCurrency(projectedClosingActual)}
+                  {formatCurrency(projectedClosing)}
                 </p>
-                <p className="text-xs text-white/50">Opening + Net Change</p>
+                <p className="text-xs text-white/50">Opening + Net Actual</p>
               </div>
             </div>
           </div>
@@ -315,7 +315,7 @@ export default function BudgetVsActual() {
                   <span className="font-semibold text-blue-900">{formatCurrency(totalIncomeActual)}</span>
                 </div>
                 <div className="flex justify-between text-sm pt-1 border-t border-blue-300">
-                  <span className="text-blue-700">Difference:</span>
+                  <span className="text-blue-700">Variance:</span>
                   <span className={`font-bold ${totalIncomeDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {formatCurrency(totalIncomeDifference)}
                   </span>
@@ -368,16 +368,16 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingUp className="w-5 h-5" />
-                Income Analysis
+                Income Analysis: Accrued vs Actual
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Planned</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Difference</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Accrued (Budget)</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Collected</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
                   </thead>
@@ -423,16 +423,16 @@ export default function BudgetVsActual() {
             <div>
               <h3 className="text-xl font-bold text-[#002561] mb-4 flex items-center gap-2">
                 <TrendingDown className="w-5 h-5" />
-                Expense Analysis
+                Expense Analysis: Budget vs Actual Spent
               </h3>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
                     <tr className="border-b-2 border-gray-300">
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Category</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Remaining</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Budget Limit</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Actual Spent</th>
+                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Variance</th>
                       <th className="text-right py-3 px-4 font-semibold text-gray-700">%</th>
                     </tr>
                   </thead>
