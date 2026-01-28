@@ -477,3 +477,46 @@ export default function BudgetVsActual() {
                     <tr className="border-t-2 border-gray-300 bg-orange-50 font-bold">
                       <td className="py-3 px-4 text-gray-900">Total Expenses</td>
                       <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpensePlanned)}</td>
+                      <td className="py-3 px-4 text-right text-gray-900">{formatCurrency(totalExpenseActual)}</td>
+                      <td className={`py-3 px-4 text-right ${totalExpenseDifference >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        {formatCurrency(totalExpenseDifference)}
+                      </td>
+                      <td className="py-3 px-4 text-right text-gray-900">
+                        {totalExpensePlanned > 0 ? `${((totalExpenseActual / totalExpensePlanned) * 100).toFixed(1)}%` : '-'}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t-2 border-gray-300 pt-4">
+            <div className="bg-gray-100 rounded-lg p-4">
+              <div className="flex justify-between items-center">
+                <span className="text-lg font-bold text-gray-900">Net Period Position (Income - Expenses)</span>
+                <div className="text-right">
+                  <div className="text-sm text-gray-600">
+                    Accrued Net: <span className="font-semibold text-gray-900">{formatCurrency(netPlanned)}</span>
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    Actual Net: <span className="font-semibold text-gray-900">{formatCurrency(netActual)}</span>
+                  </div>
+                  <div className="text-lg font-bold mt-1">
+                    Variance: <span className={netDifference >= 0 ? 'text-green-600' : 'text-red-600'}>
+                      {formatCurrency(netDifference)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="text-center text-sm text-gray-500 pt-4 border-t border-gray-200">
+            Report generated on {format(new Date(), 'MMMM d, yyyy')}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
