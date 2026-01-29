@@ -63,7 +63,7 @@ export default function SiteWizard() {
   const [units, setUnits] = useState<UnitInput[]>([]);
   const [fileUploaded, setFileUploaded] = useState(false);
 
-  // ✅ NEW: Function to generate and download the template
+  // ✅ Function to generate and download the template
   const downloadTemplate = () => {
     const templateData = [
       {
@@ -208,6 +208,7 @@ export default function SiteWizard() {
     setError('');
 
     try {
+      // 1. Create Site
       const { data: site, error: siteError } = await supabase
         .from('sites')
         .insert({
@@ -223,15 +224,17 @@ export default function SiteWizard() {
 
       if (siteError) throw siteError;
 
+      // 2. Assign Admin Role
       await supabase.from('user_site_roles').insert({
         user_id: user?.id,
         site_id: site.id,
         role: 'admin',
       });
 
+      // 3. Create Unit Types
       const unitTypesData = unitTypes.filter(ut => ut.name.trim()).map(ut => ({
         site_id: site.id,
-        name: ut.name,
+        name: ut.name.trim(), // Trim whitespace
         coefficient: ut.coefficient,
         description: ut.description,
       }));
@@ -241,8 +244,15 @@ export default function SiteWizard() {
         .insert(unitTypesData)
         .select();
 
-      const typeMap = new Map(createdTypes?.map(t => [t.name, t.id]) || []);
+      // Create a Map for easy lookup (normalize keys to lowercase)
+      const typeMap = new Map(
+        createdTypes?.map(t => [t.name.toLowerCase().trim(), t.id]) || []
+      );
+      
+      // Fallback ID (use the first created type if exact match fails)
+      const defaultTypeId = createdTypes?.[0]?.id || null;
 
+      // 4. Create Fiscal Period
       const startDate = new Date(fiscalStartYear, fiscalStartMonth - 1, 1);
       const endDate = addMonths(startDate, 12);
       const periodName = `${format(startDate, 'MMM yyyy')} - ${format(addMonths(startDate, 11), 'MMM yyyy')}`;
@@ -264,6 +274,7 @@ export default function SiteWizard() {
 
       if (fpError) throw fpError;
 
+      // 5. Create Budget Categories
       if (selectedCategories.length > 0) {
         const categoriesData = selectedCategories.map((cat, idx) => ({
           fiscal_period_id: fiscalPeriod.id,
@@ -275,20 +286,29 @@ export default function SiteWizard() {
         await supabase.from('budget_categories').insert(categoriesData);
       }
 
-      const unitsData = units.filter(u => u.unit_number.trim()).map(u => ({
-        site_id: site.id,
-        unit_type_id: typeMap.get(u.unit_type) || null,
-        unit_number: u.unit_number,
-        block: u.block || null,
-        floor: u.floor || null,
-        share_ratio: u.share_ratio || 0,
-        owner_name: u.owner_name || null,
-        owner_phone: u.owner_phone || null,
-        owner_email: u.owner_email || null,
-      }));
+      // 6. Prepare Units Data (With Safer Mapping)
+      const unitsData = units.filter(u => u.unit_number.trim()).map(u => {
+        // Try to match exact name, then lowercase, then fallback to default
+        const typeName = u.unit_type?.toLowerCase().trim();
+        const typeId = typeMap.get(typeName) || defaultTypeId;
 
-      await supabase.from('units').insert(unitsData);
+        return {
+          site_id: site.id,
+          unit_type_id: typeId, // ✅ Uses fallback if match fails
+          unit_number: u.unit_number,
+          block: u.block || null,
+          floor: u.floor || null,
+          share_ratio: u.share_ratio || 0,
+          owner_name: u.owner_name || null,
+          owner_phone: u.owner_phone || null,
+          owner_email: u.owner_email || null,
+        };
+      });
 
+      const { error: unitsError } = await supabase.from('units').insert(unitsData);
+      if (unitsError) throw unitsError; // Catch unit insertion errors
+
+      // 7. Generate Dues if Active
       if (calculatedTotalBudget > 0 && fiscalPeriod.status === 'active') {
         await supabase.rpc('generate_fiscal_period_dues', {
           p_fiscal_period_id: fiscalPeriod.id,
@@ -296,8 +316,14 @@ export default function SiteWizard() {
       }
 
       await refreshSites();
-      navigate('/dashboard');
+      
+      // ✅ Force a small delay to ensure DB propagation before redirect
+      setTimeout(() => {
+        navigate('/dashboard');
+      }, 500);
+
     } catch (err: any) {
+      console.error("Setup Error:", err);
       setError(err.message || 'Failed to create site');
     } finally {
       setLoading(false);
@@ -770,7 +796,7 @@ export default function SiteWizard() {
                     />
                   </label>
                   
-                  {/* ✅ NEW: Download Template Button */}
+                  {/* ✅ Download Template Button */}
                   <button
                     type="button"
                     onClick={downloadTemplate}
