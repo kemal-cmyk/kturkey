@@ -20,7 +20,7 @@ export default function Units() {
   const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
   const [unitDetails, setUnitDetails] = useState<{
     dues: Array<{ id: string; month_date: string; total_amount: number; paid_amount: number; status: string; currency_code: string }>;
-    payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string }>;
+    payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string; exchange_rate: number }>;
   } | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
 
@@ -95,7 +95,7 @@ export default function Units() {
       paymentIds.length > 0
         ? supabase
             .from('ledger_entries')
-            .select('id, amount, entry_date, description, payment_id, payments(payment_date, payment_method, reference_no, amount, currency_code)')
+            .select('id, amount, entry_date, description, payment_id, exchange_rate, currency_code, payments(payment_date, payment_method, reference_no, amount, currency_code)')
             .eq('entry_type', 'income')
             .in('payment_id', paymentIds)
             .not('payment_id', 'is', null)
@@ -110,7 +110,8 @@ export default function Units() {
       payment_method: entry.payments?.payment_method || 'bank_transfer',
       reference_no: entry.payments?.reference_no || null,
       description: entry.description,
-      currency_code: entry.payments?.currency_code || 'TRY',
+      currency_code: entry.payments?.currency_code || entry.currency_code || 'TRY',
+      exchange_rate: entry.exchange_rate || 1,
     }));
 
     setUnitDetails({
@@ -321,10 +322,17 @@ export default function Units() {
                                   const openingBalance = unit?.balance?.opening_balance || 0;
                                   const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
 
-                                  // Use the paid_amount from dues table - it has the correct converted amounts
-                                  const totalPaid = unitDetails.dues.reduce((sum, due) => sum + Number(due.paid_amount), 0);
                                   const duesCurrency = unitDetails.dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
                                   const displayCurrency = duesCurrency;
+
+                                  const totalPaid = unitDetails.payments.reduce((sum, payment) => {
+                                    const paymentAmount = Number(payment.amount);
+                                    if (payment.currency_code === displayCurrency) {
+                                      return sum + paymentAmount;
+                                    }
+                                    const rate = payment.exchange_rate || 1;
+                                    return sum + (paymentAmount / rate);
+                                  }, 0);
 
                                   const totalDebt = openingBalance + totalDues - totalPaid;
                                   const totalAmountDue = totalDues + openingBalance;
