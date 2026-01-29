@@ -21,16 +21,9 @@ export default function Units() {
   
   const [unitDetails, setUnitDetails] = useState<{
     dues: Array<{ id: string; month_date: string; total_amount: number; paid_amount: number; status: string; currency_code: string }>;
-    payments: Array<{ 
-      id: string; 
-      amount: number; 
-      payment_date: string; 
-      payment_method: string; 
-      reference_no: string | null; 
-      description: string | null; 
-      currency_code: string;
-      exchange_rate?: number; 
-    }>;
+    payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string; exchange_rate?: number }>;
+    // Stores the mathematically correct sum from ledger
+    ledgerSumNormalized: number; 
   } | null>(null);
   
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -98,17 +91,47 @@ export default function Units() {
       .neq('status', 'cancelled')
       .order('month_date', { ascending: false });
 
-    // 2. Fetch Payments (Directly from payments table)
+    // Determine target currency from dues (default EUR)
+    const targetCurrency = duesRes.data?.[0]?.currency_code || currentSite?.default_currency || 'EUR';
+
+    // 2. Fetch Payments (For Visual List Only)
     const paymentsRes = await supabase
       .from('payments')
       .select('*')
       .eq('unit_id', unitId)
       .order('payment_date', { ascending: false });
 
+    // 3. Fetch Ledger Entries (For Accurate Math)
+    // We sum these to get the Total Paid. Ledger has the correct exchange_rate.
+    const ledgerRes = await supabase
+      .from('ledger_entries')
+      .select('amount, currency_code, exchange_rate, entry_type')
+      .eq('unit_id', unitId)
+      .eq('entry_type', 'income'); // Only income counts as payment
+
+    // Calculate Normalized Total Paid
+    const ledgerSum = (ledgerRes.data || []).reduce((sum, entry) => {
+        const amount = Number(entry.amount);
+        
+        // If currency matches target, add raw amount
+        if (entry.currency_code === targetCurrency) {
+            return sum + amount;
+        }
+        
+        // If currency differs, apply rate
+        // Case: Debt is EUR, Payment is TRY. Rate 0.02.
+        // 1000 TL * 0.02 = 20 EUR.
+        // If rate is missing/0, fallback to 1 (safety), but ledger usually has it.
+        const rate = entry.exchange_rate && entry.exchange_rate > 0 ? Number(entry.exchange_rate) : 1;
+        return sum + (amount * rate);
+    }, 0);
+
     setUnitDetails({
       dues: duesRes.data || [],
       payments: paymentsRes.data || [],
+      ledgerSumNormalized: ledgerSum
     });
+    
     setLoadingDetails(false);
   };
 
@@ -313,24 +336,16 @@ export default function Units() {
                                   const openingBalance = unit?.balance?.opening_balance || 0;
                                   
                                   const targetCurrency = unitDetails.dues[0]?.currency_code || currentSite?.default_currency || 'EUR';
-                                  
+                                  const displayCurrency = targetCurrency;
+
                                   const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
+                                  
+                                  // ✅ FIX: Use the carefully calculated ledger sum
+                                  const totalPaid = unitDetails.ledgerSumNormalized;
 
-                                  // ✅ FIX: Sum Payments directly (ignore dues.paid_amount)
-                                  // Apply exchange rate if currencies differ
-                                  const totalPaidNormalized = unitDetails.payments.reduce((sum, p) => {
-                                      const amount = Number(p.amount);
-                                      if (p.currency_code === targetCurrency) {
-                                          return sum + amount;
-                                      }
-                                      // Normalize
-                                      const rate = p.exchange_rate ? Number(p.exchange_rate) : 1;
-                                      return sum + (amount * rate);
-                                  }, 0);
-
-                                  const totalDebt = openingBalance + totalDues - totalPaidNormalized;
+                                  const totalDebt = openingBalance + totalDues - totalPaid;
                                   const totalAmountDue = totalDues + openingBalance;
-                                  const paymentPercentage = totalAmountDue > 0 ? (totalPaidNormalized / totalAmountDue) * 100 : 0;
+                                  const paymentPercentage = totalAmountDue > 0 ? (totalPaid / totalAmountDue) * 100 : 0;
 
                                   return (
                                     <div className="mb-6 p-5 rounded-xl bg-gradient-to-br from-blue-50 via-white to-blue-50 border-2 border-blue-200 shadow-md">
@@ -343,26 +358,26 @@ export default function Units() {
                                         <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-gray-100">
                                           <div className="text-xs font-medium text-gray-600 mb-1.5">Opening Balance</div>
                                           <div className={`text-xl font-bold ${openingBalance > 0 ? 'text-red-600' : openingBalance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                                            {formatCurrency(Math.abs(openingBalance), targetCurrency)}
+                                            {formatCurrency(Math.abs(openingBalance), displayCurrency)}
                                           </div>
                                           <div className="text-xs text-gray-500 mt-1">Previous period</div>
                                         </div>
                                         <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-gray-100">
                                           <div className="text-xs font-medium text-gray-600 mb-1.5">Total Dues</div>
                                           <div className="text-xl font-bold text-gray-900">
-                                            {formatCurrency(totalDues, targetCurrency)}
+                                            {formatCurrency(totalDues, displayCurrency)}
                                           </div>
                                           <div className="text-xs text-gray-500 mt-1">Accrued fees</div>
                                         </div>
                                         <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-green-100">
                                           <div className="text-xs font-medium text-gray-600 mb-1.5">Total Paid</div>
-                                          <div className="text-xl font-bold text-green-600">{formatCurrency(totalPaidNormalized, targetCurrency)}</div>
+                                          <div className="text-xl font-bold text-green-600">{formatCurrency(totalPaid, displayCurrency)}</div>
                                           <div className="text-xs text-gray-500 mt-1">{unitDetails.payments.length} payments</div>
                                         </div>
                                         <div className="text-center p-3 bg-white rounded-xl shadow-sm border border-red-100">
                                           <div className="text-xs font-medium text-gray-600 mb-1.5">Balance</div>
                                           <div className={`text-xl font-bold ${totalDebt > 0.1 ? 'text-red-600' : totalDebt < -0.1 ? 'text-green-600' : 'text-gray-900'}`}>
-                                            {formatCurrency(Math.abs(totalDebt), targetCurrency)}
+                                            {formatCurrency(Math.abs(totalDebt), displayCurrency)}
                                           </div>
                                           <div className={`text-xs mt-1 ${totalDebt > 0.1 ? 'text-red-600' : totalDebt < -0.1 ? 'text-green-600' : 'text-gray-500'}`}>
                                             {totalDebt > 0.1 ? 'Outstanding' : totalDebt < -0.1 ? 'Overpayment' : 'Balanced'}
@@ -382,10 +397,27 @@ export default function Units() {
                                           />
                                           <div className="absolute inset-0 flex items-center justify-center">
                                             <span className="text-xs font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                                              {totalPaidNormalized > 0 ? `${formatCurrency(totalPaidNormalized, targetCurrency)} of ${formatCurrency(totalAmountDue, targetCurrency)}` : 'No payments yet'}
+                                              {totalPaid > 0 ? `${formatCurrency(totalPaid, displayCurrency)} of ${formatCurrency(totalAmountDue, displayCurrency)}` : 'No payments yet'}
                                             </span>
                                           </div>
                                         </div>
+                                        {totalDebt > 0.1 && (
+                                          <div className="mt-3 flex items-center justify-between p-3 bg-red-50 rounded-lg border border-red-200">
+                                            <span className="text-sm font-medium text-red-700">Outstanding Balance:</span>
+                                            <span className="text-lg font-bold text-red-600">{formatCurrency(totalDebt, displayCurrency)}</span>
+                                          </div>
+                                        )}
+                                        {totalDebt < -0.1 && (
+                                          <div className="mt-3 flex items-center justify-between p-3 bg-green-50 rounded-lg border border-green-200">
+                                            <span className="text-sm font-medium text-green-700">Overpayment:</span>
+                                            <span className="text-lg font-bold text-green-600">{formatCurrency(Math.abs(totalDebt), displayCurrency)}</span>
+                                          </div>
+                                        )}
+                                        {Math.abs(totalDebt) <= 0.1 && totalAmountDue > 0 && (
+                                          <div className="mt-3 flex items-center justify-center p-3 bg-green-50 rounded-lg border border-green-200">
+                                            <span className="text-sm font-bold text-green-700">All payments completed!</span>
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                   );
@@ -445,16 +477,9 @@ export default function Units() {
                                             className="p-3 bg-white rounded-lg border border-gray-200"
                                           >
                                             <div className="flex justify-between items-start mb-2">
-                                              <div>
-                                                <span className="text-sm font-medium text-green-600 block">
-                                                  {formatCurrency(Number(payment.amount), payment.currency_code)}
-                                                </span>
-                                                {payment.currency_code !== unitDetails.dues[0]?.currency_code && (
-                                                  <span className="text-xs text-gray-400 block mt-0.5">
-                                                    Rate applied: {payment.exchange_rate}
-                                                  </span>
-                                                )}
-                                              </div>
+                                              <span className="text-sm font-medium text-green-600">
+                                                {formatCurrency(Number(payment.amount), payment.currency_code)}
+                                              </span>
                                               <span className="text-xs text-gray-500">
                                                 {format(new Date(payment.payment_date), 'MMM d, yyyy')}
                                               </span>
@@ -516,7 +541,7 @@ export default function Units() {
   );
 }
 
-// ... (UnitEditModal stays exactly the same as before) ...
+// ... (UnitEditModal remains unchanged) ...
 interface UnitEditModalProps {
   unit: Unit | null;
   unitTypes: UnitType[];
