@@ -26,6 +26,7 @@ import LanguageSettings from './pages/LanguageSettings';
 import RoleSettings from './pages/RoleSettings';
 import { Loader2 } from 'lucide-react';
 import ResidentStatement from './pages/ResidentStatement';
+import UserManual from './pages/UserManual'; // <--- ADDED IMPORT
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -278,13 +279,23 @@ function AppRoutes() {
           </PrivateRoute>
         }
       />
-      {/* FIXED: Added PrivateRoute and Layout wrappers */}
       <Route
         path="/resident-statement"
         element={
           <PrivateRoute>
             <Layout>
               <ResidentStatement />
+            </Layout>
+          </PrivateRoute>
+        }
+      />
+      {/* ADDED: User Manual Route */}
+      <Route
+        path="/manual"
+        element={
+          <PrivateRoute>
+            <Layout>
+              <UserManual />
             </Layout>
           </PrivateRoute>
         }
