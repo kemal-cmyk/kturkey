@@ -88,6 +88,7 @@ export default function ResidentStatement() {
         .from('dues')
         .select('*')
         .eq('unit_id', unitId)
+        .neq('status', 'cancelled') // Don't show cancelled dues
         .order('month_date');
 
       // 2. Get Payments (CREDITS) - Step 1: Get IDs
@@ -112,7 +113,8 @@ export default function ResidentStatement() {
       }
 
       // Determine Base Currency (Default to first Due's currency or Site Default)
-      const baseCurrency = dues?.[0]?.currency_code || currentSite?.default_currency || 'TRY';
+      // Usually EUR for your site
+      const baseCurrency = dues?.[0]?.currency_code || currentSite?.default_currency || 'EUR';
 
       // --- MERGE ---
       const combined: StatementItem[] = [];
@@ -135,15 +137,23 @@ export default function ResidentStatement() {
       ledgerEntries.forEach(entry => {
         // We use the amount from the ledger entry directly as it usually reflects the transaction
         let effectiveAmount = Number(entry.amount);
+        const rate = Number(entry.exchange_rate) || 1;
         
-        // Handle Currency Conversion for Display
-        // If the Ledger Entry is in a different currency than the Base Statement Currency
+        // ✅ FIXED CURRENCY CONVERSION LOGIC
         if (entry.currency_code !== baseCurrency) {
            if (entry.currency_code === 'TRY' && baseCurrency !== 'TRY') {
-              effectiveAmount = Number(entry.amount) / Number(entry.exchange_rate || 1);
+              // Case: Paid in TL, Statement in EUR. Rate is e.g. 0.02
+              // 1000 TL * 0.02 = 20 EUR
+              effectiveAmount = Number(entry.amount) * rate;
            } 
            else if (entry.currency_code !== 'TRY' && baseCurrency === 'TRY') {
-              effectiveAmount = Number(entry.amount) * Number(entry.exchange_rate || 1);
+              // Case: Paid in EUR, Statement in TL. Rate is e.g. 35.0
+              // 100 EUR * 35 = 3500 TL
+              effectiveAmount = Number(entry.amount) * rate;
+           }
+           // Fallback for other crosses (USD -> EUR etc), assumes rate is a multiplier to base
+           else {
+              effectiveAmount = Number(entry.amount) * rate;
            }
         }
 
@@ -265,8 +275,8 @@ export default function ResidentStatement() {
                       <span className="font-bold text-lg text-gray-900">{selectedUnit?.owner_name}</span>
                     </div>
                     <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
-                       <Building2 className="w-4 h-4 text-gray-400"/>
-                       <span>{selectedUnit?.block ? `Block ${selectedUnit.block}, ` : ''}Unit {selectedUnit?.unit_number}</span>
+                        <Building2 className="w-4 h-4 text-gray-400"/>
+                        <span>{selectedUnit?.block ? `Block ${selectedUnit.block}, ` : ''}Unit {selectedUnit?.unit_number}</span>
                     </div>
                     {selectedUnit?.owner_phone && (
                       <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -352,7 +362,7 @@ export default function ResidentStatement() {
                             <span>{item.description}</span>
                             {item.original_amount && item.original_currency !== summary.currency && (
                               <span className="text-xs text-gray-500 italic">
-                                (Paid: {formatCurrency(item.original_amount, item.original_currency)})
+                                (Paid: {formatCurrency(item.original_amount, item.original_currency)} @ Rate: {((item.amount_paid/item.original_amount) || 0).toFixed(4)})
                               </span>
                             )}
                           </div>
