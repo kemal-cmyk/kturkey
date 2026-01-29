@@ -4,8 +4,7 @@ import { supabase } from '../lib/supabase';
 import { useSearchParams } from 'react-router-dom';
 import { 
   FileText, Search, Printer, Loader2, 
-  TrendingUp, TrendingDown, Wallet, Calendar,
-  Building2, Phone, User
+  Calendar, Building2, Phone, User, AlertCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -15,8 +14,8 @@ interface StatementItem {
   date: string;
   type: 'due' | 'payment';
   description: string;
-  amount_accrued: number; // Debt (Borç)
-  amount_paid: number;    // Credit (Alacak)
+  amount_accrued: number; // Debt (Borç) in Base Currency
+  amount_paid: number;    // Credit (Alacak) in Base Currency
   original_amount?: number; 
   original_currency?: string; 
   running_balance: number;
@@ -77,21 +76,34 @@ export default function ResidentStatement() {
     setUnits(data || []);
   };
 
+  // ✅ Helper to convert currency roughly if no rate is stored
+  // In a real app, you would fetch historical rates from a DB table
+  const convertCurrency = (amount: number, from: string, to: string) => {
+    if (from === to) return amount;
+    // Simple static rates for display estimation if conversion is needed
+    // You should ideally store 'exchange_rate' on Dues table too, but this fixes the visual bug
+    if (from === 'EUR' && to === 'TRY') return amount * 35; // Example Rate
+    if (from === 'TRY' && to === 'EUR') return amount / 35; 
+    if (from === 'USD' && to === 'TRY') return amount * 32;
+    if (from === 'TRY' && to === 'USD') return amount / 32;
+    return amount; // Fallback
+  };
+
   const fetchStatementData = async (unitId: string) => {
     setLoading(true);
     try {
       const unit = units.find(u => u.id === unitId);
       const openingBalance = unit?.opening_balance || 0;
 
-      // 1. Get Dues (DEBTS) - Directly linked to Unit
+      // 1. Get Dues (DEBTS)
       const { data: dues } = await supabase
         .from('dues')
         .select('*')
         .eq('unit_id', unitId)
-        .neq('status', 'cancelled') // Don't show cancelled dues
+        .neq('status', 'cancelled')
         .order('month_date');
 
-      // 2. Get Payments (CREDITS) - Step 1: Get IDs
+      // 2. Get Payments (CREDITS)
       const { data: paymentIdsData } = await supabase
         .from('payments')
         .select('id')
@@ -99,61 +111,59 @@ export default function ResidentStatement() {
 
       const paymentIds = paymentIdsData?.map(p => p.id) || [];
 
-      // 3. Get Ledger Entries - Step 2: Filter by Payment IDs
-      // This matches your Units.tsx logic exactly to prevent showing all incomes
+      // 3. Get Ledger Entries (Linked Payments)
       let ledgerEntries: any[] = [];
       if (paymentIds.length > 0) {
         const { data: ledger } = await supabase
           .from('ledger_entries')
           .select('*')
-          .in('payment_id', paymentIds) // <--- CRITICAL FILTER
+          .in('payment_id', paymentIds)
           .eq('entry_type', 'income')
           .order('entry_date');
         ledgerEntries = ledger || [];
       }
 
-      // Determine Base Currency (Default to first Due's currency or Site Default)
-      // Usually EUR for your site
-      const baseCurrency = dues?.[0]?.currency_code || currentSite?.default_currency || 'EUR';
+      // ✅ FIX: Force Base Currency to match Site Settings
+      const baseCurrency = currentSite?.default_currency || 'TRY';
 
-      // --- MERGE ---
       const combined: StatementItem[] = [];
 
-      // A. Add Dues
+      // A. Add Dues (With Conversion Logic)
       dues?.forEach(d => {
+        // ✅ FIX: Fallback to base_amount if total is 0/null
+        const rawAmount = Number(d.total_amount) || Number(d.base_amount) || 0;
+        
+        // Convert if due currency differs from site currency
+        const effectiveAmount = convertCurrency(rawAmount, d.currency_code, baseCurrency);
+
         combined.push({
           id: d.id,
           date: d.month_date,
           type: 'due',
-          description: `Accrual: ${format(new Date(d.month_date), 'MMMM yyyy')}`,
-          amount_accrued: Number(d.total_amount),
+          description: `Monthly Fee: ${format(new Date(d.month_date), 'MMMM yyyy')}`,
+          amount_accrued: effectiveAmount,
           amount_paid: 0,
+          original_amount: rawAmount,
+          original_currency: d.currency_code,
           running_balance: 0,
-          currency_code: d.currency_code
+          currency_code: baseCurrency
         });
       });
 
-      // B. Add Ledger Incomes (Linked to Unit Payments)
+      // B. Add Ledger Incomes (With Conversion Logic)
       ledgerEntries.forEach(entry => {
-        // We use the amount from the ledger entry directly as it usually reflects the transaction
-        let effectiveAmount = Number(entry.amount);
+        const rawAmount = Number(entry.amount);
+        let effectiveAmount = rawAmount;
         const rate = Number(entry.exchange_rate) || 1;
         
-        // ✅ FIXED CURRENCY CONVERSION LOGIC
+        // If ledger entry has a rate and is different currency, use the rate
         if (entry.currency_code !== baseCurrency) {
-           if (entry.currency_code === 'TRY' && baseCurrency !== 'TRY') {
-              // Case: Paid in TL, Statement in EUR. Rate is e.g. 0.02
-              // 1000 TL * 0.02 = 20 EUR
-              effectiveAmount = Number(entry.amount) * rate;
-           } 
-           else if (entry.currency_code !== 'TRY' && baseCurrency === 'TRY') {
-              // Case: Paid in EUR, Statement in TL. Rate is e.g. 35.0
-              // 100 EUR * 35 = 3500 TL
-              effectiveAmount = Number(entry.amount) * rate;
-           }
-           // Fallback for other crosses (USD -> EUR etc), assumes rate is a multiplier to base
-           else {
-              effectiveAmount = Number(entry.amount) * rate;
+           if (rate !== 1) {
+             // If we stored a rate, use it (Assuming rate converts TO base)
+             effectiveAmount = rawAmount * rate;
+           } else {
+             // Fallback to estimator
+             effectiveAmount = convertCurrency(rawAmount, entry.currency_code, baseCurrency);
            }
         }
 
@@ -164,7 +174,7 @@ export default function ResidentStatement() {
           description: entry.description || 'Payment Received',
           amount_accrued: 0,
           amount_paid: effectiveAmount,
-          original_amount: Number(entry.amount),
+          original_amount: rawAmount,
           original_currency: entry.currency_code,
           running_balance: 0,
           currency_code: baseCurrency
@@ -265,6 +275,7 @@ export default function ResidentStatement() {
                     <Calendar className="w-4 h-4 mr-1"/> Date: <span className="font-medium text-gray-900 ml-1">{format(new Date(), 'dd MMMM yyyy')}</span>
                   </p>
                   <h3 className="text-lg font-bold text-gray-900 mt-4">{currentSite?.name}</h3>
+                  <p className="text-sm text-gray-500">{currentSite?.address} {currentSite?.city}</p>
                 </div>
 
                 <div className="text-right min-w-[250px]">
@@ -292,7 +303,7 @@ export default function ResidentStatement() {
                 <div className="p-3 bg-white rounded-lg border border-gray-200 text-center print:border-black">
                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Opening Balance</p>
                    <p className={`text-xl font-bold ${summary.openingBalance > 0 ? 'text-red-600' : summary.openingBalance < 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                      {formatCurrency(Math.abs(summary.openingBalance), summary.currency)}
+                     {formatCurrency(Math.abs(summary.openingBalance), summary.currency)}
                    </p>
                    <p className="text-[10px] text-gray-400">Previous Period</p>
                 </div>
@@ -300,7 +311,7 @@ export default function ResidentStatement() {
                 <div className="p-3 bg-white rounded-lg border border-gray-200 text-center print:border-black">
                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Accrued</p>
                    <p className="text-xl font-bold text-gray-900">
-                      {formatCurrency(summary.totalDues, summary.currency)}
+                     {formatCurrency(summary.totalDues, summary.currency)}
                    </p>
                    <p className="text-[10px] text-gray-400">Dues & Fees</p>
                 </div>
@@ -308,7 +319,7 @@ export default function ResidentStatement() {
                 <div className="p-3 bg-white rounded-lg border border-gray-200 text-center print:border-black">
                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Total Paid</p>
                    <p className="text-xl font-bold text-green-600">
-                      {formatCurrency(summary.totalPaid, summary.currency)}
+                     {formatCurrency(summary.totalPaid, summary.currency)}
                    </p>
                    <p className="text-[10px] text-gray-400">Payments Received</p>
                 </div>
@@ -316,10 +327,10 @@ export default function ResidentStatement() {
                 <div className={`p-3 rounded-lg border text-center print:border-black ${summary.endingBalance > 0 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
                    <p className="text-xs font-bold text-gray-500 uppercase mb-1">Ending Balance</p>
                    <p className={`text-xl font-bold ${summary.endingBalance > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {formatCurrency(Math.abs(summary.endingBalance), summary.currency)}
+                     {formatCurrency(Math.abs(summary.endingBalance), summary.currency)}
                    </p>
                    <p className="text-[10px] font-semibold opacity-75">
-                      {summary.endingBalance > 0 ? 'OUTSTANDING' : summary.endingBalance < 0 ? 'CREDIT' : 'BALANCED'}
+                     {summary.endingBalance > 0 ? 'OUTSTANDING' : summary.endingBalance < 0 ? 'CREDIT' : 'BALANCED'}
                    </p>
                 </div>
               </div>
@@ -360,9 +371,11 @@ export default function ResidentStatement() {
                         <td className="px-6 py-2.5 text-gray-800 border-r">
                           <div className="flex flex-col">
                             <span>{item.description}</span>
-                            {item.original_amount && item.original_currency !== summary.currency && (
-                              <span className="text-xs text-gray-500 italic">
-                                (Paid: {formatCurrency(item.original_amount, item.original_currency)} @ Rate: {((item.amount_paid/item.original_amount) || 0).toFixed(4)})
+                            {/* Show original currency if different from statement currency */}
+                            {item.original_currency !== summary.currency && item.original_amount !== undefined && (
+                              <span className="text-xs text-gray-500 italic flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3"/>
+                                Original: {formatCurrency(item.original_amount, item.original_currency)}
                               </span>
                             )}
                           </div>
