@@ -239,7 +239,7 @@ export default function Layout({ children }: LayoutProps) {
               );
             })}
 
-            {/* ADDED: User Manual Link (Always visible at the bottom) */}
+            {/* ADDED: User Manual Link - always visible at the bottom of navigation */}
             <Link
               to="/manual"
               onClick={() => setSidebarOpen(false)}
