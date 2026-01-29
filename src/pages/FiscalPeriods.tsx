@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   Calendar, Plus, Check, Clock, Archive, Loader2,
-  AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt,
+  AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt, DollarSign,
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
@@ -61,6 +61,13 @@ interface SetDuesModalProps {
   onSet: () => void;
 }
 
+// --- NEW INTERFACE FOR EXTRA FEE MODAL ---
+interface ExtraFeeModalProps {
+  siteId: string;
+  activePeriodId: string; // We need the active period ID to link the debt
+  onClose: () => void;
+}
+
 interface Unit {
   id: string;
   unit_number: string;
@@ -86,11 +93,18 @@ export default function FiscalPeriods() {
   const [showRolloverModal, setShowRolloverModal] = useState(false);
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [showSetDuesModal, setShowSetDuesModal] = useState(false);
+  
+  // --- NEW STATE FOR EXTRA FEE ---
+  const [showExtraFeeModal, setShowExtraFeeModal] = useState(false);
+
   const [editingCategory, setEditingCategory] = useState<BudgetCategory | null>(null);
   const [addingEntryCategory, setAddingEntryCategory] = useState<BudgetCategory | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
   const isAdmin = currentRole?.role === 'admin';
+
+  // Find the currently active period
+  const activePeriod = periods.find(p => p.status === 'active');
 
   useEffect(() => {
     if (currentSite) {
@@ -177,28 +191,20 @@ export default function FiscalPeriods() {
     }).format(amount);
   };
 
-  // ✅ HELPER: Clean strings for matching (Matches BudgetVsActual Logic)
   const normalizeCategory = (str: string) => {
       return str.toLowerCase()
-          .replace('communual', 'communal') // Fix typo
-          .replace(/payments?|payment/g, '') // Remove 'payment' words
-          // KEEP 'fee' because 'Maintenance Fee' needs it
+          .replace('communual', 'communal')
+          .replace(/payments?|payment/g, '')
           .replace(/\s+/g, ' ')
           .trim();
   };
 
-  // ✅ HELPER: Determine Income vs Expense (Matches BudgetVsActual Logic)
   const checkIsIncome = (name: string) => {
       const lower = name.toLowerCase().trim();
-      
-      // Strict Income Keywords
       const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
       if (incomeKeywords.some(k => lower.includes(k))) return true;
-
-      // Special Logic for "Fee" (Maintenance Fee = Income, Accountant Fee = Expense)
       if (lower.includes('maintenance') && lower.includes('fee')) return true;
-
-      return false; // Defaults to Expense
+      return false;
   };
 
   if (loading) {
@@ -216,19 +222,42 @@ export default function FiscalPeriods() {
           <h1 className="text-2xl font-bold text-gray-900">Financial Periods</h1>
           <p className="text-gray-600">Manage budget cycles and year-end rollover</p>
         </div>
-        {isAdmin && (
-          <button
-            type="button"
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            New Period
-          </button>
-        )}
+        <div className="flex gap-2">
+          {isAdmin && (
+            <>
+              {/* --- NEW EXTRA FEE BUTTON --- */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!activePeriod) {
+                    alert("You must have an 'Active' fiscal period to add fees.");
+                    return;
+                  }
+                  setShowExtraFeeModal(true);
+                }}
+                className={`flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors ${!activePeriod ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={!activePeriod}
+                title={!activePeriod ? "No active period found" : "Add one-time fee for all units"}
+              >
+                <DollarSign className="w-4 h-4 mr-2" />
+                Add Extra Fee
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(true)}
+                className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                New Period
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ... (Existing List Code) ... */}
         <div className="lg:col-span-1 space-y-4">
           <h3 className="font-semibold text-gray-900">All Periods</h3>
           {periods.length === 0 ? (
@@ -320,12 +349,11 @@ export default function FiscalPeriods() {
                       </button>
                     )}
                   </div>
-                  
+                 
                   {budgetCategories.length > 0 ? (
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
                         
-                        // ✅ FIX: Use Smart Matching Logic
                         const normCatName = normalizeCategory(cat.category_name);
                         const isIncome = checkIsIncome(cat.category_name);
 
@@ -333,18 +361,15 @@ export default function FiscalPeriods() {
                             .filter(e => {
                                 if (e.category === 'Transfer') return false;
                                 const normEntryCat = normalizeCategory(e.category);
-                                // Check for exact match, substring match, or reverse substring match
                                 return normEntryCat === normCatName || 
-                                       normEntryCat.includes(normCatName) || 
-                                       normCatName.includes(normEntryCat);
+                                      normEntryCat.includes(normCatName) || 
+                                      normCatName.includes(normEntryCat);
                             })
                             .reduce((sum, e) => {
                                 const val = Number(e.amount_reporting_try || e.amount);
-                                // If Income Category: Collected (+), Refunds (-)
                                 if (isIncome) {
                                     return sum + (e.entry_type === 'income' ? val : -val);
                                 }
-                                // If Expense Category: Spent (+), Rebates (-)
                                 else {
                                     return sum + (e.entry_type === 'expense' ? val : -val);
                                 }
@@ -563,6 +588,7 @@ export default function FiscalPeriods() {
         />
       )}
 
+      {/* ✅ BUG FIX: Removed 'activatePeriod' from here. Now just refreshes! */}
       {showSetDuesModal && selectedPeriod && currentSite && (
         <SetDuesModal
           periodId={selectedPeriod.id}
@@ -571,13 +597,27 @@ export default function FiscalPeriods() {
           onClose={() => setShowSetDuesModal(false)}
           onSet={() => {
             setShowSetDuesModal(false);
-            activatePeriod(selectedPeriod.id); 
+            fetchPeriods(); // Just refresh list
+            fetchPeriodDetails(selectedPeriod.id); // Refresh budget details
           }}
+        />
+      )}
+
+      {/* --- EXTRA FEE MODAL --- */}
+      {showExtraFeeModal && currentSite && activePeriod && (
+        <ExtraFeeModal 
+          siteId={currentSite.id} 
+          activePeriodId={activePeriod.id} 
+          onClose={() => setShowExtraFeeModal(false)} 
         />
       )}
     </div>
   );
 }
+
+// ... (Existing helper functions remain unchanged) ...
+// Copy the rest of your file (StatusBadge, CreatePeriodModal, etc.) here. 
+// I am including them below for completeness to ensure you have a full working file.
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
