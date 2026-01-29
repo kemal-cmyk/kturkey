@@ -3,11 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
-  Building2, Calendar, Layers, Users, ArrowRight, ArrowLeft,
-  Check, Loader2, Upload, Plus, Trash2, X, FileSpreadsheet
+  Building2, Calendar, Layers, ArrowRight, ArrowLeft,
+  Check, Loader2, Plus, Trash2, X
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
-import * as XLSX from 'xlsx';
 import { EXPENSE_CATEGORIES } from '../lib/constants';
 
 interface UnitTypeInput {
@@ -16,22 +15,10 @@ interface UnitTypeInput {
   description: string;
 }
 
-interface UnitInput {
-  unit_number: string;
-  block: string;
-  floor: number;
-  unit_type: string;
-  share_ratio: number;
-  owner_name: string;
-  owner_phone: string;
-  owner_email: string;
-}
-
 const STEPS = [
   { id: 1, name: 'Site Info', icon: Building2 },
   { id: 2, name: 'Financial Period', icon: Calendar },
   { id: 3, name: 'Unit Types', icon: Layers },
-  { id: 4, name: 'Import Units', icon: Users },
 ];
 
 export default function SiteWizard() {
@@ -41,12 +28,14 @@ export default function SiteWizard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Step 1: Site Info
   const [siteName, setSiteName] = useState('');
   const [siteAddress, setSiteAddress] = useState('');
   const [siteCity, setSiteCity] = useState('');
   const [distributionMethod, setDistributionMethod] = useState<'coefficient' | 'share_ratio'>('coefficient');
   const [defaultCurrency, setDefaultCurrency] = useState('TRY');
 
+  // Step 2: Financial
   const [fiscalStartMonth, setFiscalStartMonth] = useState(new Date().getMonth() + 1);
   const [fiscalStartYear, setFiscalStartYear] = useState(new Date().getFullYear());
   const [totalBudget, setTotalBudget] = useState(0);
@@ -56,43 +45,10 @@ export default function SiteWizard() {
   const [categoryAmounts, setCategoryAmounts] = useState<Record<string, number>>({});
   const [customCategory, setCustomCategory] = useState('');
 
+  // Step 3: Unit Types
   const [unitTypes, setUnitTypes] = useState<UnitTypeInput[]>([
     { name: 'Standard', coefficient: 1.0, description: 'Standard apartment' },
   ]);
-
-  const [units, setUnits] = useState<UnitInput[]>([]);
-  const [fileUploaded, setFileUploaded] = useState(false);
-
-  // ✅ Function to generate and download the template
-  const downloadTemplate = () => {
-    const templateData = [
-      {
-        'Unit Number': '1',
-        'Block': 'A',
-        'Floor': 1,
-        'Unit Type': unitTypes[0]?.name || 'Standard', // Use the first type defined
-        'Share Ratio': 10,
-        'Owner Name': 'John Doe',
-        'Phone': '555-0101',
-        'Email': 'john@example.com'
-      },
-      {
-        'Unit Number': '2',
-        'Block': 'A',
-        'Floor': 2,
-        'Unit Type': unitTypes[0]?.name || 'Standard',
-        'Share Ratio': 15,
-        'Owner Name': 'Jane Smith',
-        'Phone': '555-0102',
-        'Email': 'jane@example.com'
-      }
-    ];
-
-    const ws = XLSX.utils.json_to_sheet(templateData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Units Template");
-    XLSX.writeFile(wb, "site_units_template.xlsx");
-  };
 
   const handleNext = () => {
     if (currentStep === 1 && !siteName.trim()) {
@@ -100,7 +56,7 @@ export default function SiteWizard() {
       return;
     }
     setError('');
-    setCurrentStep(prev => Math.min(prev + 1, 4));
+    setCurrentStep(prev => Math.min(prev + 1, 3)); // Max step is now 3
   };
 
   const handleBack = () => {
@@ -124,86 +80,7 @@ export default function SiteWizard() {
     setUnitTypes(updated);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const data = evt.target?.result;
-        const workbook = XLSX.read(data, { type: 'binary' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const json = XLSX.utils.sheet_to_json(worksheet) as any[];
-
-        // --- UPDATED PARSING LOGIC (Handles EN/TR headers) ---
-        const parsedUnits: UnitInput[] = json.map(row => {
-            // Helper to get value from multiple possible keys
-            const getVal = (keys: string[]) => {
-                for (const key of keys) {
-                    if (row[key] !== undefined) return row[key];
-                }
-                return '';
-            };
-
-            return {
-                unit_number: String(getVal(['Unit Number', 'unit_number', 'Unit No', 'No', 'Kapı No', 'Daire No', 'Numara'])).trim(),
-                block: String(getVal(['Block', 'block', 'Blok'])).trim(),
-                floor: Number(getVal(['Floor', 'floor', 'Kat'])) || 0,
-                unit_type: String(getVal(['Unit Type', 'unit_type', 'Type', 'Tip', 'Daire Tipi'])) || 'Standard',
-                share_ratio: Number(getVal(['Share Ratio', 'share_ratio', 'Arsa Payı', 'Pay'])) || 0,
-                owner_name: String(getVal(['Owner Name', 'owner_name', 'Owner', 'Name', 'Kat Maliki', 'Ad Soyad'])).trim(),
-                owner_phone: String(getVal(['Phone', 'phone', 'Mobile', 'Telefon', 'Cep'])).trim(),
-                owner_email: String(getVal(['Email', 'email', 'E-mail', 'Eposta'])).trim(),
-            };
-        }).filter(u => u.unit_number); // Only keep rows with a unit number
-
-        if (parsedUnits.length === 0) {
-            setError('No valid units found. Please check your column headers.');
-            return;
-        }
-
-        setUnits(parsedUnits);
-        setFileUploaded(true);
-        setError('');
-      } catch (err) {
-        console.error("Excel parse error:", err);
-        setError('Failed to parse Excel file. Please ensure it is a valid .xlsx or .xls file.');
-      }
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  const addManualUnit = () => {
-    setUnits([...units, {
-      unit_number: '',
-      block: '',
-      floor: 0,
-      unit_type: unitTypes[0]?.name || 'Standard',
-      share_ratio: 0,
-      owner_name: '',
-      owner_phone: '',
-      owner_email: '',
-    }]);
-  };
-
-  const removeUnit = (index: number) => {
-    setUnits(units.filter((_, i) => i !== index));
-  };
-
-  const updateUnit = (index: number, field: keyof UnitInput, value: string | number) => {
-    const updated = [...units];
-    updated[index] = { ...updated[index], [field]: value };
-    setUnits(updated);
-  };
-
   const handleComplete = async () => {
-    if (units.length === 0) {
-      setError('Please add at least one unit');
-      return;
-    }
-
     setLoading(true);
     setError('');
 
@@ -234,23 +111,12 @@ export default function SiteWizard() {
       // 3. Create Unit Types
       const unitTypesData = unitTypes.filter(ut => ut.name.trim()).map(ut => ({
         site_id: site.id,
-        name: ut.name.trim(), // Trim whitespace
+        name: ut.name.trim(),
         coefficient: ut.coefficient,
         description: ut.description,
       }));
 
-      const { data: createdTypes } = await supabase
-        .from('unit_types')
-        .insert(unitTypesData)
-        .select();
-
-      // Create a Map for easy lookup (normalize keys to lowercase)
-      const typeMap = new Map(
-        createdTypes?.map(t => [t.name.toLowerCase().trim(), t.id]) || []
-      );
-      
-      // Fallback ID (use the first created type if exact match fails)
-      const defaultTypeId = createdTypes?.[0]?.id || null;
+      await supabase.from('unit_types').insert(unitTypesData);
 
       // 4. Create Fiscal Period
       const startDate = new Date(fiscalStartYear, fiscalStartMonth - 1, 1);
@@ -286,42 +152,11 @@ export default function SiteWizard() {
         await supabase.from('budget_categories').insert(categoriesData);
       }
 
-      // 6. Prepare Units Data (With Safer Mapping)
-      const unitsData = units.filter(u => u.unit_number.trim()).map(u => {
-        // Try to match exact name, then lowercase, then fallback to default
-        const typeName = u.unit_type?.toLowerCase().trim();
-        const typeId = typeMap.get(typeName) || defaultTypeId;
-
-        return {
-          site_id: site.id,
-          unit_type_id: typeId, // ✅ Uses fallback if match fails
-          unit_number: u.unit_number,
-          block: u.block || null,
-          floor: u.floor || null,
-          share_ratio: u.share_ratio || 0,
-          owner_name: u.owner_name || null,
-          owner_phone: u.owner_phone || null,
-          owner_email: u.owner_email || null,
-        };
-      });
-
-      const { error: unitsError } = await supabase.from('units').insert(unitsData);
-      if (unitsError) throw unitsError; // Catch unit insertion errors
-
-      // 7. Generate Dues if Active
-      if (calculatedTotalBudget > 0 && fiscalPeriod.status === 'active') {
-        await supabase.rpc('generate_fiscal_period_dues', {
-          p_fiscal_period_id: fiscalPeriod.id,
-        });
-      }
+      // Note: We don't generate dues here anymore because there are no units yet.
+      // Dues will be generated when units are imported in Settings.
 
       await refreshSites();
-      
-      // ✅ Force a small delay to ensure DB propagation before redirect
-      setTimeout(() => {
-        navigate('/dashboard');
-      }, 500);
-
+      navigate('/dashboard');
     } catch (err: any) {
       console.error("Setup Error:", err);
       setError(err.message || 'Failed to create site');
@@ -338,6 +173,7 @@ export default function SiteWizard() {
           <p className="text-gray-600 mt-2">Create a new property site in a few simple steps</p>
         </div>
 
+        {/* Step Indicators */}
         <div className="mb-8">
           <div className="flex items-center justify-center">
             {STEPS.map((step, index) => {
@@ -380,6 +216,7 @@ export default function SiteWizard() {
           </div>
         </div>
 
+        {/* Form Container */}
         <form 
           className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8"
           onSubmit={(e) => e.preventDefault()}
@@ -390,6 +227,7 @@ export default function SiteWizard() {
             </div>
           )}
 
+          {/* STEP 1: Site Info */}
           {currentStep === 1 && (
             <div className="space-y-6">
               <h2 className="text-xl font-semibold text-gray-900">Site Information</h2>
@@ -446,11 +284,6 @@ export default function SiteWizard() {
                   <option value="USD">US Dollar (USD)</option>
                   <option value="EUR">Euro (EUR)</option>
                   <option value="GBP">British Pound (GBP)</option>
-                  <option value="CHF">Swiss Franc (CHF)</option>
-                  <option value="JPY">Japanese Yen (JPY)</option>
-                  <option value="CNY">Chinese Yuan (CNY)</option>
-                  <option value="CAD">Canadian Dollar (CAD)</option>
-                  <option value="AUD">Australian Dollar (AUD)</option>
                 </select>
                 <p className="text-xs text-gray-500 mt-1">
                   This will be the reporting currency for budgets and financial statements
@@ -495,6 +328,7 @@ export default function SiteWizard() {
             </div>
           )}
 
+          {/* STEP 2: Financial Period */}
           {currentStep === 2 && (
             <div className="space-y-6">
               <h2 className="text-xl font-semibold text-gray-900">Financial Period Setup</h2>
@@ -698,6 +532,7 @@ export default function SiteWizard() {
             </div>
           )}
 
+          {/* STEP 3: Unit Types */}
           {currentStep === 3 && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
@@ -774,130 +609,7 @@ export default function SiteWizard() {
             </div>
           )}
 
-          {currentStep === 4 && (
-            <div className="space-y-6">
-              <h2 className="text-xl font-semibold text-gray-900">Import Units</h2>
-
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600 mb-2">Upload Excel file with unit data</p>
-                <p className="text-sm text-gray-500 mb-4">
-                  Columns: Unit Number, Block, Floor, Unit Type, Share Ratio, Owner Name, Phone, Email
-                </p>
-                <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                  <label className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg cursor-pointer hover:bg-[#003380] transition-colors">
-                    <Upload className="w-4 h-4 mr-2" />
-                    Select File
-                    <input
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                  
-                  {/* ✅ Download Template Button */}
-                  <button
-                    type="button"
-                    onClick={downloadTemplate}
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
-                    Download Template
-                  </button>
-                </div>
-              </div>
-
-              {fileUploaded && (
-                <div className="flex items-center text-green-600 bg-green-50 px-4 py-2 rounded-lg">
-                  <Check className="w-5 h-5 mr-2" />
-                  {units.length} units loaded from file
-                </div>
-              )}
-
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-500">Or add units manually</span>
-                <button
-                  type="button"
-                  onClick={addManualUnit}
-                  className="flex items-center text-[#002561] hover:underline text-sm font-medium"
-                >
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add Unit
-                </button>
-              </div>
-
-              {units.length > 0 && (
-                <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded-lg">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Unit #</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Block</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Type</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Owner</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {units.map((unit, index) => (
-                        <tr key={index} className="hover:bg-gray-50">
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              value={unit.unit_number}
-                              onChange={(e) => updateUnit(index, 'unit_number', e.target.value)}
-                              className="w-20 px-2 py-1 border border-gray-300 rounded"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              value={unit.block}
-                              onChange={(e) => updateUnit(index, 'block', e.target.value)}
-                              className="w-16 px-2 py-1 border border-gray-300 rounded"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <select
-                              value={unit.unit_type}
-                              onChange={(e) => updateUnit(index, 'unit_type', e.target.value)}
-                              className="w-24 px-2 py-1 border border-gray-300 rounded"
-                            >
-                              {unitTypes.map((ut) => (
-                                <option key={ut.name} value={ut.name}>
-                                  {ut.name}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              value={unit.owner_name}
-                              onChange={(e) => updateUnit(index, 'owner_name', e.target.value)}
-                              className="w-32 px-2 py-1 border border-gray-300 rounded"
-                              placeholder="Owner name"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <button
-                              type="button"
-                              onClick={() => removeUnit(index)}
-                              className="text-red-500 hover:text-red-700"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
+          {/* Navigation Buttons */}
           <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
             {currentStep > 1 ? (
               <button
@@ -918,7 +630,7 @@ export default function SiteWizard() {
               </button>
             )}
 
-            {currentStep < 4 ? (
+            {currentStep < 3 ? (
               <button
                 type="button"
                 onClick={handleNext}
