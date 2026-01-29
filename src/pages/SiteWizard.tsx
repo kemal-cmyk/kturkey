@@ -137,22 +137,39 @@ export default function SiteWizard() {
         const worksheet = workbook.Sheets[sheetName];
         const json = XLSX.utils.sheet_to_json(worksheet) as any[];
 
-        const parsedUnits: UnitInput[] = json.map(row => ({
-          unit_number: String(row['Unit Number'] || row['unit_number'] || ''),
-          block: String(row['Block'] || row['block'] || ''),
-          floor: Number(row['Floor'] || row['floor'] || 0),
-          unit_type: String(row['Unit Type'] || row['unit_type'] || 'Standard'),
-          share_ratio: Number(row['Share Ratio'] || row['share_ratio'] || 0),
-          owner_name: String(row['Owner Name'] || row['owner_name'] || ''),
-          owner_phone: String(row['Phone'] || row['owner_phone'] || ''),
-          owner_email: String(row['Email'] || row['owner_email'] || ''),
-        })).filter(u => u.unit_number);
+        // --- UPDATED PARSING LOGIC (Handles EN/TR headers) ---
+        const parsedUnits: UnitInput[] = json.map(row => {
+            // Helper to get value from multiple possible keys
+            const getVal = (keys: string[]) => {
+                for (const key of keys) {
+                    if (row[key] !== undefined) return row[key];
+                }
+                return '';
+            };
+
+            return {
+                unit_number: String(getVal(['Unit Number', 'unit_number', 'Unit No', 'No', 'Kapı No', 'Daire No', 'Numara'])).trim(),
+                block: String(getVal(['Block', 'block', 'Blok'])).trim(),
+                floor: Number(getVal(['Floor', 'floor', 'Kat'])) || 0,
+                unit_type: String(getVal(['Unit Type', 'unit_type', 'Type', 'Tip', 'Daire Tipi'])) || 'Standard',
+                share_ratio: Number(getVal(['Share Ratio', 'share_ratio', 'Arsa Payı', 'Pay'])) || 0,
+                owner_name: String(getVal(['Owner Name', 'owner_name', 'Owner', 'Name', 'Kat Maliki', 'Ad Soyad'])).trim(),
+                owner_phone: String(getVal(['Phone', 'phone', 'Mobile', 'Telefon', 'Cep'])).trim(),
+                owner_email: String(getVal(['Email', 'email', 'E-mail', 'Eposta'])).trim(),
+            };
+        }).filter(u => u.unit_number); // Only keep rows with a unit number
+
+        if (parsedUnits.length === 0) {
+            setError('No valid units found. Please check your column headers.');
+            return;
+        }
 
         setUnits(parsedUnits);
         setFileUploaded(true);
         setError('');
       } catch (err) {
-        setError('Failed to parse Excel file. Please check the format.');
+        console.error("Excel parse error:", err);
+        setError('Failed to parse Excel file. Please ensure it is a valid .xlsx or .xls file.');
       }
     };
     reader.readAsBinaryString(file);
@@ -580,333 +597,3 @@ export default function SiteWizard() {
                     className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] focus:border-[#002561]"
                     placeholder="Add custom category..."
                   />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (customCategory.trim() && !selectedCategories.includes(customCategory.trim())) {
-                        setSelectedCategories([...selectedCategories, customCategory.trim()]);
-                        setCustomCategory('');
-                      }
-                    }}
-                    disabled={!customCategory.trim() || selectedCategories.includes(customCategory.trim())}
-                    className="px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] disabled:opacity-50 transition-colors"
-                  >
-                    <Plus className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-
-              {selectedCategories.length > 0 && (
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <label className="block text-sm font-medium text-gray-700">
-                      Budget Amounts per Category
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (totalBudget > 0 && selectedCategories.length > 0) {
-                          const perCategory = Math.floor(totalBudget / selectedCategories.length);
-                          const newAmounts: Record<string, number> = {};
-                          selectedCategories.forEach(cat => {
-                            newAmounts[cat] = perCategory;
-                          });
-                          setCategoryAmounts(newAmounts);
-                        }
-                      }}
-                      className="text-sm text-[#002561] hover:underline font-medium"
-                    >
-                      Distribute Evenly
-                    </button>
-                  </div>
-
-                  <div className="bg-gray-50 rounded-lg p-4 mb-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">Reference Total Budget (TRY)</span>
-                      <input
-                        type="number"
-                        value={totalBudget || ''}
-                        onChange={(e) => setTotalBudget(Number(e.target.value))}
-                        className="w-40 px-3 py-2 border border-gray-300 rounded-lg text-right focus:ring-2 focus:ring-[#002561]"
-                        placeholder="e.g., 500000"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {selectedCategories.map(cat => (
-                      <div key={cat} className="flex items-center space-x-3 bg-white border border-gray-200 rounded-lg p-3">
-                        <span className="flex-1 text-sm font-medium text-gray-700 truncate">{cat}</span>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-xs text-gray-400">TRY</span>
-                          <input
-                            type="number"
-                            value={categoryAmounts[cat] || ''}
-                            onChange={(e) => setCategoryAmounts({ ...categoryAmounts, [cat]: Number(e.target.value) })}
-                            className="w-32 px-3 py-2 border border-gray-300 rounded-lg text-right focus:ring-2 focus:ring-[#002561]"
-                            placeholder="0"
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {currentStep === 3 && (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xl font-semibold text-gray-900">Unit Types</h2>
-                <button
-                  type="button"
-                  onClick={addUnitType}
-                  className="flex items-center text-[#002561] hover:underline text-sm font-medium"
-                >
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add Type
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {unitTypes.map((ut, index) => (
-                  <div
-                    key={index}
-                    className="p-4 border border-gray-200 rounded-lg space-y-4"
-                  >
-                    <div className="flex items-start justify-between">
-                      <span className="text-sm font-medium text-gray-500">Type #{index + 1}</span>
-                      {unitTypes.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeUnitType(index)}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Name
-                        </label>
-                        <input
-                          type="text"
-                          value={ut.name}
-                          onChange={(e) => updateUnitType(index, 'name', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] focus:border-[#002561]"
-                          placeholder="e.g., Duplex"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Coefficient
-                        </label>
-                        <input
-                          type="number"
-                          step="0.1"
-                          value={ut.coefficient}
-                          onChange={(e) => updateUnitType(index, 'coefficient', Number(e.target.value))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] focus:border-[#002561]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">
-                          Description
-                        </label>
-                        <input
-                          type="text"
-                          value={ut.description}
-                          onChange={(e) => updateUnitType(index, 'description', e.target.value)}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] focus:border-[#002561]"
-                          placeholder="Optional"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {currentStep === 4 && (
-            <div className="space-y-6">
-              <h2 className="text-xl font-semibold text-gray-900">Import Units</h2>
-
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-                <p className="text-gray-600 mb-2">Upload Excel file with unit data</p>
-                <p className="text-sm text-gray-500 mb-4">
-                  Columns: Unit Number, Block, Floor, Unit Type, Share Ratio, Owner Name, Phone, Email
-                </p>
-                <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                  <label className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg cursor-pointer hover:bg-[#003380] transition-colors">
-                    <Upload className="w-4 h-4 mr-2" />
-                    Select File
-                    <input
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                  </label>
-                  
-                  {/* ✅ NEW: Download Template Button */}
-                  <button
-                    type="button"
-                    onClick={downloadTemplate}
-                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
-                    Download Template
-                  </button>
-                </div>
-              </div>
-
-              {fileUploaded && (
-                <div className="flex items-center text-green-600 bg-green-50 px-4 py-2 rounded-lg">
-                  <Check className="w-5 h-5 mr-2" />
-                  {units.length} units loaded from file
-                </div>
-              )}
-
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-500">Or add units manually</span>
-                <button
-                  type="button"
-                  onClick={addManualUnit}
-                  className="flex items-center text-[#002561] hover:underline text-sm font-medium"
-                >
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add Unit
-                </button>
-              </div>
-
-              {units.length > 0 && (
-                <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded-lg">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Unit #</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Block</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Type</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700">Owner</th>
-                        <th className="px-4 py-3 text-left font-medium text-gray-700"></th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {units.map((unit, index) => (
-                        <tr key={index} className="hover:bg-gray-50">
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              value={unit.unit_number}
-                              onChange={(e) => updateUnit(index, 'unit_number', e.target.value)}
-                              className="w-20 px-2 py-1 border border-gray-300 rounded"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              value={unit.block}
-                              onChange={(e) => updateUnit(index, 'block', e.target.value)}
-                              className="w-16 px-2 py-1 border border-gray-300 rounded"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <select
-                              value={unit.unit_type}
-                              onChange={(e) => updateUnit(index, 'unit_type', e.target.value)}
-                              className="w-24 px-2 py-1 border border-gray-300 rounded"
-                            >
-                              {unitTypes.map((ut) => (
-                                <option key={ut.name} value={ut.name}>
-                                  {ut.name}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-                          <td className="px-4 py-3">
-                            <input
-                              type="text"
-                              value={unit.owner_name}
-                              onChange={(e) => updateUnit(index, 'owner_name', e.target.value)}
-                              className="w-32 px-2 py-1 border border-gray-300 rounded"
-                              placeholder="Owner name"
-                            />
-                          </td>
-                          <td className="px-4 py-3">
-                            <button
-                              type="button"
-                              onClick={() => removeUnit(index)}
-                              className="text-red-500 hover:text-red-700"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
-            {currentStep > 1 ? (
-              <button
-                type="button"
-                onClick={handleBack}
-                className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900"
-              >
-                <ArrowLeft className="w-4 h-4 mr-2" />
-                Back
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => navigate('/dashboard')}
-                className="flex items-center px-4 py-2 text-gray-600 hover:text-gray-900"
-              >
-                Cancel
-              </button>
-            )}
-
-            {currentStep < 4 ? (
-              <button
-                type="button"
-                onClick={handleNext}
-                className="flex items-center px-6 py-2.5 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
-              >
-                Next
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleComplete}
-                disabled={loading}
-                className="flex items-center px-6 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4 mr-2" />
-                    Complete Setup
-                  </>
-                )}
-              </button>
-            )}
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
