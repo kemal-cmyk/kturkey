@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
-  Building2, Calendar, Layers, ArrowRight, ArrowLeft,
-  Check, Loader2, Plus, Trash2, X
+  Building2, Calendar, Layers, Users, ArrowRight, ArrowLeft,
+  Check, Loader2, Upload, Plus, Trash2, X, FileSpreadsheet
 } from 'lucide-react';
-import { format, addMonths } from 'date-fns';
+import { format, addMonths, subDays } from 'date-fns'; // Added subDays
+import * as XLSX from 'xlsx';
 import { EXPENSE_CATEGORIES } from '../lib/constants';
 
 interface UnitTypeInput {
@@ -15,10 +16,22 @@ interface UnitTypeInput {
   description: string;
 }
 
+interface UnitInput {
+  unit_number: string;
+  block: string;
+  floor: number;
+  unit_type: string;
+  share_ratio: number;
+  owner_name: string;
+  owner_phone: string;
+  owner_email: string;
+}
+
 const STEPS = [
   { id: 1, name: 'Site Info', icon: Building2 },
   { id: 2, name: 'Financial Period', icon: Calendar },
   { id: 3, name: 'Unit Types', icon: Layers },
+  { id: 4, name: 'Import Units', icon: Users }, // Restored Step 4
 ];
 
 export default function SiteWizard() {
@@ -50,13 +63,48 @@ export default function SiteWizard() {
     { name: 'Standard', coefficient: 1.0, description: 'Standard apartment' },
   ]);
 
+  // Step 4: Units Import
+  const [units, setUnits] = useState<UnitInput[]>([]);
+  const [fileUploaded, setFileUploaded] = useState(false);
+
+  // ✅ Download Template Function
+  const downloadTemplate = () => {
+    const templateData = [
+      {
+        'Unit Number': '1',
+        'Block': 'A',
+        'Floor': 1,
+        'Unit Type': unitTypes[0]?.name || 'Standard',
+        'Share Ratio': 10,
+        'Owner Name': 'John Doe',
+        'Phone': '555-0101',
+        'Email': 'john@example.com'
+      },
+      {
+        'Unit Number': '2',
+        'Block': 'A',
+        'Floor': 2,
+        'Unit Type': unitTypes[0]?.name || 'Standard',
+        'Share Ratio': 15,
+        'Owner Name': 'Jane Smith',
+        'Phone': '555-0102',
+        'Email': 'jane@example.com'
+      }
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Units Template");
+    XLSX.writeFile(wb, "site_units_template.xlsx");
+  };
+
   const handleNext = () => {
     if (currentStep === 1 && !siteName.trim()) {
       setError('Site name is required');
       return;
     }
     setError('');
-    setCurrentStep(prev => Math.min(prev + 1, 3)); // Max step is now 3
+    setCurrentStep(prev => Math.min(prev + 1, 4));
   };
 
   const handleBack = () => {
@@ -80,7 +128,84 @@ export default function SiteWizard() {
     setUnitTypes(updated);
   };
 
+  // ✅ Robust File Upload Handler
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = evt.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet) as any[];
+
+        // Helper to get value from multiple possible keys
+        const getVal = (row: any, keys: string[]) => {
+            for (const key of keys) {
+                if (row[key] !== undefined) return row[key];
+            }
+            return '';
+        };
+
+        const parsedUnits: UnitInput[] = json.map(row => ({
+            unit_number: String(getVal(row, ['Unit Number', 'unit_number', 'Unit No', 'No', 'Kapı No', 'Daire No', 'Numara'])).trim(),
+            block: String(getVal(row, ['Block', 'block', 'Blok'])).trim(),
+            floor: Number(getVal(row, ['Floor', 'floor', 'Kat'])) || 0,
+            unit_type: String(getVal(row, ['Unit Type', 'unit_type', 'Type', 'Tip', 'Daire Tipi'])) || 'Standard',
+            share_ratio: Number(getVal(row, ['Share Ratio', 'share_ratio', 'Arsa Payı', 'Pay'])) || 0,
+            owner_name: String(getVal(row, ['Owner Name', 'owner_name', 'Owner', 'Name', 'Kat Maliki', 'Ad Soyad'])).trim(),
+            owner_phone: String(getVal(row, ['Phone', 'phone', 'Mobile', 'Telefon', 'Cep'])).trim(),
+            owner_email: String(getVal(row, ['Email', 'email', 'E-mail', 'Eposta'])).trim(),
+        })).filter(u => u.unit_number);
+
+        if (parsedUnits.length === 0) {
+            setError('No valid units found. Please check your column headers.');
+            return;
+        }
+
+        setUnits(parsedUnits);
+        setFileUploaded(true);
+        setError('');
+      } catch (err) {
+        console.error("Excel parse error:", err);
+        setError('Failed to parse Excel file. Please ensure it is a valid .xlsx or .xls file.');
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const addManualUnit = () => {
+    setUnits([...units, {
+      unit_number: '',
+      block: '',
+      floor: 0,
+      unit_type: unitTypes[0]?.name || 'Standard',
+      share_ratio: 0,
+      owner_name: '',
+      owner_phone: '',
+      owner_email: '',
+    }]);
+  };
+
+  const removeUnit = (index: number) => {
+    setUnits(units.filter((_, i) => i !== index));
+  };
+
+  const updateUnit = (index: number, field: keyof UnitInput, value: string | number) => {
+    const updated = [...units];
+    updated[index] = { ...updated[index], [field]: value };
+    setUnits(updated);
+  };
+
   const handleComplete = async () => {
+    if (units.length === 0) {
+      setError('Please add at least one unit');
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -112,16 +237,25 @@ export default function SiteWizard() {
       const unitTypesData = unitTypes.filter(ut => ut.name.trim()).map(ut => ({
         site_id: site.id,
         name: ut.name.trim(),
-        coefficient: ut.coefficient,
+        coefficient: Number(ut.coefficient),
         description: ut.description,
       }));
 
-      await supabase.from('unit_types').insert(unitTypesData);
+      const { data: createdTypes } = await supabase
+        .from('unit_types')
+        .insert(unitTypesData)
+        .select();
+
+      // Maps for lookup
+      const typeIdMap = new Map(createdTypes?.map(t => [t.name.toLowerCase().trim(), t.id]) || []);
+      const typeCoeffMap = new Map(createdTypes?.map(t => [t.id, t.coefficient]) || []);
+      const defaultTypeId = createdTypes?.[0]?.id || null;
 
       // 4. Create Fiscal Period
       const startDate = new Date(fiscalStartYear, fiscalStartMonth - 1, 1);
-      const endDate = addMonths(startDate, 12);
-      const periodName = `${format(startDate, 'MMM yyyy')} - ${format(addMonths(startDate, 11), 'MMM yyyy')}`;
+      // ✅ FIX: Use subDays to make end date strictly 1 year minus 1 day (e.g., Jan 1 - Dec 31)
+      const endDate = subDays(addMonths(startDate, 12), 1);
+      const periodName = `${format(startDate, 'MMM yyyy')} - ${format(endDate, 'MMM yyyy')}`;
 
       const calculatedTotalBudget = Object.values(categoryAmounts).reduce((sum, val) => sum + (val || 0), 0);
 
@@ -152,11 +286,88 @@ export default function SiteWizard() {
         await supabase.from('budget_categories').insert(categoriesData);
       }
 
-      // Note: We don't generate dues here anymore because there are no units yet.
-      // Dues will be generated when units are imported in Settings.
+      // 6. Insert Units (Using robust matching)
+      const unitsData = units.filter(u => u.unit_number.trim()).map(u => {
+        const typeName = u.unit_type?.toLowerCase().trim();
+        const typeId = typeIdMap.get(typeName) || defaultTypeId;
+
+        return {
+          site_id: site.id,
+          unit_type_id: typeId,
+          unit_number: u.unit_number,
+          block: u.block || null,
+          floor: u.floor || null,
+          share_ratio: u.share_ratio || 0,
+          owner_name: u.owner_name || null,
+          owner_phone: u.owner_phone || null,
+          owner_email: u.owner_email || null,
+        };
+      });
+
+      const { data: insertedUnits, error: unitsError } = await supabase
+        .from('units')
+        .insert(unitsData)
+        .select();
+
+      if (unitsError) throw unitsError;
+
+      // 7. Generate Dues & Distribute Budget
+      if (calculatedTotalBudget > 0 && fiscalPeriod.status === 'active' && insertedUnits) {
+        
+        // A. Generate Empty Dues (Uses database function)
+        await supabase.rpc('generate_fiscal_period_dues', {
+          p_fiscal_period_id: fiscalPeriod.id,
+        });
+
+        // B. Calculate Distribution
+        const monthlyTotal = calculatedTotalBudget / 12;
+        let unitAmounts = [];
+
+        // Determine Total Weight based on method
+        let totalWeight = 0;
+        
+        if (distributionMethod === 'share_ratio') {
+          totalWeight = insertedUnits.reduce((sum, u) => sum + Number(u.share_ratio || 0), 0);
+        } else {
+          totalWeight = insertedUnits.reduce((sum, u) => {
+            const coeff = typeCoeffMap.get(u.unit_type_id) || 1;
+            return sum + coeff;
+          }, 0);
+        }
+
+        // C. Calculate per unit and prepare payload
+        if (totalWeight > 0) {
+          unitAmounts = insertedUnits.map(u => {
+            let weight = 0;
+            if (distributionMethod === 'share_ratio') {
+              weight = Number(u.share_ratio || 0);
+            } else {
+              weight = typeCoeffMap.get(u.unit_type_id) || 1;
+            }
+
+            const share = weight / totalWeight;
+            const monthlyFee = share * monthlyTotal;
+
+            return {
+              unit_id: u.id,
+              monthly_amount: Math.round(monthlyFee * 100) / 100
+            };
+          });
+
+          // D. Apply Amounts to Database
+          await supabase.rpc('set_varied_unit_monthly_dues', {
+            p_fiscal_period_id: fiscalPeriod.id,
+            p_unit_amounts: unitAmounts,
+            p_currency_code: defaultCurrency
+          });
+        }
+      }
 
       await refreshSites();
-      navigate('/dashboard');
+      setTimeout(() => {
+        navigate('/dashboard');
+      }, 500);
+
     } catch (err: any) {
       console.error("Setup Error:", err);
       setError(err.message || 'Failed to create site');
@@ -609,6 +820,131 @@ export default function SiteWizard() {
             </div>
           )}
 
+          {/* STEP 4: Import Units (Restored) */}
+          {currentStep === 4 && (
+            <div className="space-y-6">
+              <h2 className="text-xl font-semibold text-gray-900">Import Units</h2>
+
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
+                <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600 mb-2">Upload Excel file with unit data</p>
+                <p className="text-sm text-gray-500 mb-4">
+                  Columns: Unit Number, Block, Floor, Unit Type, Share Ratio, Owner Name, Phone, Email
+                </p>
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <label className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg cursor-pointer hover:bg-[#003380] transition-colors">
+                    <Upload className="w-4 h-4 mr-2" />
+                    Select File
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  
+                  {/* Download Template Button */}
+                  <button
+                    type="button"
+                    onClick={downloadTemplate}
+                    className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 bg-white rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 mr-2 text-green-600" />
+                    Download Template
+                  </button>
+                </div>
+              </div>
+
+              {fileUploaded && (
+                <div className="flex items-center text-green-600 bg-green-50 px-4 py-2 rounded-lg">
+                  <Check className="w-5 h-5 mr-2" />
+                  {units.length} units loaded from file
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-gray-500">Or add units manually</span>
+                <button
+                  type="button"
+                  onClick={addManualUnit}
+                  className="flex items-center text-[#002561] hover:underline text-sm font-medium"
+                >
+                  <Plus className="w-4 h-4 mr-1" />
+                  Add Unit
+                </button>
+              </div>
+
+              {units.length > 0 && (
+                <div className="max-h-[400px] overflow-y-auto border border-gray-200 rounded-lg">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-medium text-gray-700">Unit #</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-700">Block</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-700">Type</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-700">Owner</th>
+                        <th className="px-4 py-3 text-left font-medium text-gray-700"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {units.map((unit, index) => (
+                        <tr key={index} className="hover:bg-gray-50">
+                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              value={unit.unit_number}
+                              onChange={(e) => updateUnit(index, 'unit_number', e.target.value)}
+                              className="w-20 px-2 py-1 border border-gray-300 rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              value={unit.block}
+                              onChange={(e) => updateUnit(index, 'block', e.target.value)}
+                              className="w-16 px-2 py-1 border border-gray-300 rounded"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <select
+                              value={unit.unit_type}
+                              onChange={(e) => updateUnit(index, 'unit_type', e.target.value)}
+                              className="w-24 px-2 py-1 border border-gray-300 rounded"
+                            >
+                              {unitTypes.map((ut) => (
+                                <option key={ut.name} value={ut.name}>
+                                  {ut.name}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3">
+                            <input
+                              type="text"
+                              value={unit.owner_name}
+                              onChange={(e) => updateUnit(index, 'owner_name', e.target.value)}
+                              className="w-32 px-2 py-1 border border-gray-300 rounded"
+                              placeholder="Owner name"
+                            />
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              type="button"
+                              onClick={() => removeUnit(index)}
+                              className="text-red-500 hover:text-red-700"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Navigation Buttons */}
           <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200">
             {currentStep > 1 ? (
@@ -630,7 +966,7 @@ export default function SiteWizard() {
               </button>
             )}
 
-            {currentStep < 3 ? (
+            {currentStep < 4 ? (
               <button
                 type="button"
                 onClick={handleNext}
