@@ -7,7 +7,7 @@ import {
   Receipt, Search, Filter, Download, Loader2,
   TrendingUp, TrendingDown, ChevronDown, Calendar,
   Building2, Wallet, Save, X, Trash2, Plus, Edit2, Check, Upload,
-  ArrowRightLeft
+  ArrowRightLeft, AlertTriangle
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { LedgerEntry, FiscalPeriod, BudgetCategory } from '../types/database';
@@ -43,6 +43,10 @@ export default function Ledger() {
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [units, setUnits] = useState<Array<{ id: string; unit_number: string; block: string | null; owner_name: string | null }>>([]);
+
+  // --- NEW STATE FOR MULTI-SELECT ---
+  const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const [newEntry, setNewEntry] = useState({
     entry_type: 'expense' as 'income' | 'expense' | 'transfer',
@@ -187,6 +191,69 @@ export default function Ledger() {
       maximumFractionDigits: 2,
     }).format(amount);
   };
+
+  // --- NEW: BULK DELETE FUNCTIONS ---
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedEntries(displayEntries.map(e => e.id));
+    } else {
+      setSelectedEntries([]);
+    }
+  };
+
+  const handleSelectEntry = (id: string, checked: boolean) => {
+    if (checked) {
+      setSelectedEntries([...selectedEntries, id]);
+    } else {
+      setSelectedEntries(selectedEntries.filter(eid => eid !== id));
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedEntries.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedEntries.length} entries? This cannot be undone.`)) return;
+
+    setIsDeleting(true);
+    const { error } = await supabase
+      .from('ledger_entries')
+      .delete()
+      .in('id', selectedEntries);
+
+    if (error) {
+      console.error('Error deleting entries:', error);
+      alert('Failed to delete entries.');
+    } else {
+      setSelectedEntries([]);
+      await fetchEntries();
+      await fetchData(); // Force refresh accounts
+    }
+    setIsDeleting(false);
+  };
+
+  const handleDeleteAll = async () => {
+    if (!currentSite) return;
+    const confirmText = "DELETE-ALL";
+    const userText = prompt(`⚠️ WARNING: This will delete ALL ledger entries for this site.\n\nType "${confirmText}" to confirm:`);
+    
+    if (userText !== confirmText) return;
+
+    setIsDeleting(true);
+    const { error } = await supabase
+        .from('ledger_entries')
+        .delete()
+        .eq('site_id', currentSite.id); // Safer than just deleting all
+
+    if (error) {
+      console.error('Error deleting all:', error);
+      alert('Failed to delete all entries.');
+    } else {
+      setSelectedEntries([]);
+      await fetchEntries();
+      await fetchData();
+    }
+    setIsDeleting(false);
+  };
+  // ----------------------------------
 
   const handleAddEntry = async () => {
     if (!currentSite || !user) return;
@@ -338,7 +405,7 @@ export default function Ledger() {
     setUnitDuesCurrency(null);
 
     await fetchEntries();
-    await fetchData(); // Force accounts update
+    await fetchData(); 
   };
 
   const handleUpdateEntry = async (entry: LedgerEntry, updates: Partial<LedgerEntry>) => {
@@ -362,7 +429,7 @@ export default function Ledger() {
 
     await supabase.from('ledger_entries').delete().eq('id', id);
     await fetchEntries();
-    await fetchData(); // Force accounts update
+    await fetchData();
   };
 
   const handleSaveAccount = async (accountData: Partial<Account>) => {
@@ -517,11 +584,32 @@ export default function Ledger() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div><h1 className="text-2xl font-bold text-gray-900">Ledger</h1><p className="text-gray-600">Income and expense tracking</p></div>
         <div className="flex gap-2">
+          {/* --- BULK ACTIONS --- */}
+          {selectedEntries.length > 0 && isAdmin && (
+            <button 
+              onClick={handleDeleteSelected} 
+              disabled={isDeleting}
+              className="flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50"
+            >
+              {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+              Delete ({selectedEntries.length})
+            </button>
+          )}
+          {isAdmin && allEntries.length > 0 && selectedEntries.length === 0 && (
+             <button 
+                onClick={handleDeleteAll} 
+                className="flex items-center px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium"
+             >
+                <AlertTriangle className="w-4 h-4 mr-2"/>
+                Reset Ledger
+             </button>
+          )}
           <button onClick={() => navigate('/ledger/import')} className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"><Upload className="w-4 h-4 mr-2" />Import from Excel</button>
           <button onClick={handleExport} className="flex items-center px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"><Download className="w-4 h-4 mr-2" />Export</button>
         </div>
       </div>
 
+      {/* ... (Account Cards & Summary Stats - No Changes Here) ... */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Accounts</h2>
@@ -593,6 +681,15 @@ export default function Ledger() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
+                {/* CHECKBOX HEADER */}
+                <th className="px-4 py-3 w-10 text-center">
+                  <input 
+                    type="checkbox" 
+                    onChange={(e) => handleSelectAll(e.target.checked)}
+                    checked={displayEntries.length > 0 && selectedEntries.length === displayEntries.length}
+                    className="w-4 h-4 text-[#002561] rounded border-gray-300 focus:ring-[#002561]"
+                  />
+                </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-28">Date</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Account</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-32">Category</th>
@@ -608,7 +705,9 @@ export default function Ledger() {
               {isAdmin && (
                 <>
                   <tr className="bg-blue-50/50">
+                    <td className="px-4 py-2"></td>
                     <td className="px-4 py-2" colSpan={9}>
+                      {/* ... (Existing Add Entry Row) ... */}
                       <div className="flex flex-wrap items-center gap-4">
                         <div className="flex gap-2">
                           <button type="button" onClick={() => setNewEntry({ ...newEntry, entry_type: 'expense', category: budgetCategories[0]?.category_name || '', from_account_id: '', to_account_id: '' })} className={`px-4 py-1.5 text-sm rounded font-medium ${newEntry.entry_type === 'expense' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-600'}`}>Expense</button>
@@ -630,9 +729,11 @@ export default function Ledger() {
                       </div>
                     </td>
                   </tr>
+                  {/* ... (Existing Transfer Row Logic) ... */}
                   {newEntry.entry_type === 'transfer' ? (
                     <>
                     <tr className="bg-blue-50/50">
+                      <td className="px-4 py-2"></td>
                       <td className="px-4 py-2"><input type="date" value={newEntry.entry_date} onChange={e => setNewEntry({...newEntry, entry_date: e.target.value})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"/></td>
                       <td className="px-4 py-2" colSpan={2}><div className="flex gap-1"><select value={newEntry.from_account_id} onChange={e => setNewEntry({...newEntry, from_account_id: e.target.value})} className="w-1/2 text-sm border rounded p-1"><option value="">From</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.account_name} ({a.currency_code})</option>)}</select><span>→</span><select value={newEntry.to_account_id} onChange={e => setNewEntry({...newEntry, to_account_id: e.target.value})} className="w-1/2 text-sm border rounded p-1"><option value="">To</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.account_name} ({a.currency_code})</option>)}</select></div></td>
                       <td className="px-4 py-2"><input type="text" placeholder="Desc" value={newEntry.description} onChange={e => setNewEntry({...newEntry, description: e.target.value})} className="w-full text-sm border rounded p-1" /></td>
@@ -649,7 +750,7 @@ export default function Ledger() {
                     </tr>
                     {isFX && fromAcc && toAcc && newEntry.amount && (
                         <tr className="bg-orange-50/50">
-                            <td colSpan={9} className="px-4 py-2 text-sm text-center text-orange-800">
+                            <td colSpan={10} className="px-4 py-2 text-sm text-center text-orange-800">
                                 <ArrowRightLeft className="w-4 h-4 inline mr-1"/>
                                 Sending <strong>{formatCurrency(Number(newEntry.amount))} {fromAcc.currency_code}</strong> 
                                 {' '} @ {newEntry.exchange_rate} 
@@ -661,6 +762,7 @@ export default function Ledger() {
                   ) : (
                     <>
                     <tr className="bg-blue-50/50">
+                        <td className="px-4 py-2"></td>
                         <td className="px-4 py-2"><input type="date" value={newEntry.entry_date} onChange={e => setNewEntry({...newEntry, entry_date: e.target.value})} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded"/></td>
                         <td className="px-4 py-2"><select value={newEntry.account_id} onChange={e => setNewEntry({...newEntry, account_id: e.target.value})} className="w-full text-sm border rounded p-1"><option value="">Account</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.account_name}</option>)}</select></td>
                         <td className="px-4 py-2"><select value={newEntry.category} onChange={e => setNewEntry({...newEntry, category: e.target.value})} className="w-full text-sm border rounded p-1"><option value="">Cat</option>{budgetCategories.map(c => <option key={c.id} value={c.category_name}>{c.category_name}</option>)}</select></td>
@@ -672,6 +774,7 @@ export default function Ledger() {
                     </tr>
                     {(newEntry.category === 'Maintenance Fees' || newEntry.category === 'Extra Fees') && (
                         <tr className="bg-blue-50/30">
+                          <td className="px-4 py-2"></td>
                           <td colSpan={9} className="px-4 py-2">
                             <div className="flex items-center gap-2">
                               <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Unit:</label>
@@ -700,6 +803,8 @@ export default function Ledger() {
                   formatCurrency={formatCurrency}
                   accountBalance={entry.accountBalance}
                   totalBalance={entry.totalBalance}
+                  isSelected={selectedEntries.includes(entry.id)}
+                  onSelect={(checked) => handleSelectEntry(entry.id, checked)}
                   onEdit={() => setEditingRow(entry.id)}
                   onSave={(updates) => handleUpdateEntry(entry, updates)}
                   onCancel={() => setEditingRow(null)}
@@ -732,7 +837,7 @@ export default function Ledger() {
 }
 
 // ----------------------------------------------------------------------
-// SUB-COMPONENTS (INCLUDED FULLY)
+// UPDATED ENTRY ROW (With Checkbox)
 // ----------------------------------------------------------------------
 
 interface EntryRowProps {
@@ -745,6 +850,8 @@ interface EntryRowProps {
   formatCurrency: (amount: number) => string;
   accountBalance: number;
   totalBalance: number;
+  isSelected: boolean;
+  onSelect: (checked: boolean) => void;
   onEdit: () => void;
   onSave: (updates: Partial<LedgerEntry>) => void;
   onCancel: () => void;
@@ -761,6 +868,8 @@ function EntryRow({
   formatCurrency,
   accountBalance,
   totalBalance,
+  isSelected,
+  onSelect,
   onEdit,
   onSave,
   onCancel,
@@ -783,6 +892,7 @@ function EntryRow({
     return (
       <>
         <tr className="bg-yellow-50">
+          <td className="px-4 py-2"></td> {/* Empty for checkbox column */}
           <td className="px-4 py-2"><input type="date" value={editData.entry_date} onChange={(e) => setEditData({ ...editData, entry_date: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"/></td>
           <td className="px-4 py-2"><select value={editData.account_id} onChange={(e) => setEditData({ ...editData, account_id: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"><option value="">Select</option>{accounts.map(acc => (<option key={acc.id} value={acc.id}>{acc.account_name}</option>))}</select></td>
           <td className="px-4 py-2"><select value={editData.category} onChange={(e) => setEditData({ ...editData, category: e.target.value, unit_id: '' })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white">{categories.map(cat => (<option key={cat.id} value={cat.category_name}>{cat.category_name}</option>))}<option value="Other">Other</option></select></td>
@@ -795,6 +905,7 @@ function EntryRow({
         </tr>
         {isMaintenanceRelated && (
           <tr className="bg-yellow-50/50">
+            <td className="px-4 py-2"></td>
             <td colSpan={9} className="px-4 py-2">
               <div className="flex items-center gap-2"><label className="text-sm font-medium text-gray-700 whitespace-nowrap">Select Unit:</label><select value={editData.unit_id} onChange={(e) => setEditData({ ...editData, unit_id: e.target.value })} className="px-3 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"><option value="">Choose unit...</option>{units.map(unit => (<option key={unit.id} value={unit.id}>{unit.block ? `${unit.block}-` : ''}{unit.unit_number} {unit.owner_name ? `(${unit.owner_name})` : ''}</option>))}</select><p className="text-xs text-gray-500 italic">Note: Editing does not update unit payment records</p></div>
             </td>
@@ -808,7 +919,15 @@ function EntryRow({
   const toAccount = accounts.find(a => a.id === entry.to_account_id);
 
   return (
-    <tr className="hover:bg-gray-50">
+    <tr className={`hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}>
+      <td className="px-4 py-3 text-center">
+        <input 
+          type="checkbox" 
+          checked={isSelected}
+          onChange={(e) => onSelect(e.target.checked)}
+          className="w-4 h-4 text-[#002561] rounded border-gray-300 focus:ring-[#002561]"
+        />
+      </td>
       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">{format(new Date(entry.entry_date), 'MMM d, yyyy')}</td>
       <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
         {entry.entry_type === 'transfer' ? (
@@ -843,6 +962,7 @@ function EntryRow({
   );
 }
 
+// ... (AccountFormModal remains the same as before, no changes needed there) ...
 interface AccountFormModalProps {
   account: Account | null;
   onClose: () => void;
