@@ -24,6 +24,7 @@ import {
   UserCog,
   Globe,
   Shield,
+  BookOpen, // <--- ADDED IMPORT
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -237,6 +238,20 @@ export default function Layout({ children }: LayoutProps) {
                 </Link>
               );
             })}
+
+            {/* ADDED: User Manual Link (Always visible at the bottom) */}
+            <Link
+              to="/manual"
+              onClick={() => setSidebarOpen(false)}
+              className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors mt-4 border-t border-white/10 ${
+                location.pathname === '/manual'
+                  ? 'bg-white text-[#002561] font-medium'
+                  : 'text-white/70 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <BookOpen className="w-5 h-5" />
+              <span>User Manual</span>
+            </Link>
           </nav>
 
           <div className="px-4 py-4 border-t border-white/10">
