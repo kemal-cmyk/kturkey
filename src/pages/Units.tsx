@@ -19,11 +19,20 @@ export default function Units() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [expandedUnit, setExpandedUnit] = useState<string | null>(null);
   
+  // Stores details + Calculated Sum
   const [unitDetails, setUnitDetails] = useState<{
-    dues: Array<{ id: string; month_date: string; total_amount: number; paid_amount: number; status: string; currency_code: string }>;
-    payments: Array<{ id: string; amount: number; payment_date: string; payment_method: string; reference_no: string | null; description: string | null; currency_code: string; exchange_rate?: number }>;
-    // Stores the mathematically correct sum from ledger
-    ledgerSumNormalized: number; 
+    dues: Array<{ id: string; month_date: string; total_amount: number; status: string; currency_code: string }>;
+    payments: Array<{ 
+      id: string; 
+      amount: number; 
+      payment_date: string; 
+      payment_method: string; 
+      reference_no: string | null; 
+      description: string | null; 
+      currency_code: string; 
+      exchange_rate?: number; 
+    }>;
+    totalPaidNormalized: number; // The calculated Total in Target Currency
   } | null>(null);
   
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -83,53 +92,63 @@ export default function Units() {
   const fetchUnitDetails = async (unitId: string) => {
     setLoadingDetails(true);
 
-    // 1. Fetch Dues (Charges)
+    // 1. Fetch Dues (To determine Target Currency)
     const duesRes = await supabase
-      .from('dues')
-      .select('id, month_date, total_amount, paid_amount, status, currency_code')
-      .eq('unit_id', unitId)
-      .neq('status', 'cancelled')
-      .order('month_date', { ascending: false });
+        .from('dues')
+        .select('id, month_date, total_amount, status, currency_code')
+        .eq('unit_id', unitId)
+        .neq('status', 'cancelled')
+        .order('month_date', { ascending: false });
 
-    // Determine target currency from dues (default EUR)
+    // Identify the target currency (e.g., EUR if most dues are in EUR)
     const targetCurrency = duesRes.data?.[0]?.currency_code || currentSite?.default_currency || 'EUR';
 
-    // 2. Fetch Payments (For Visual List Only)
+    // 2. Fetch Payments (For Visual List)
     const paymentsRes = await supabase
-      .from('payments')
-      .select('*')
-      .eq('unit_id', unitId)
-      .order('payment_date', { ascending: false });
+        .from('payments')
+        .select('*')
+        .eq('unit_id', unitId)
+        .order('payment_date', { ascending: false });
 
+    const payments = paymentsRes.data || [];
+    
     // 3. Fetch Ledger Entries (For Accurate Math)
-    // We sum these to get the Total Paid. Ledger has the correct exchange_rate.
-    const ledgerRes = await supabase
-      .from('ledger_entries')
-      .select('amount, currency_code, exchange_rate, entry_type')
-      .eq('unit_id', unitId)
-      .eq('entry_type', 'income'); // Only income counts as payment
+    // We grab ledger entries linked to these payments to get the EXACT amounts and rates used accounting-side
+    const paymentIds = payments.map(p => p.id);
+    
+    let ledgerEntries: any[] = [];
+    if (paymentIds.length > 0) {
+        const { data } = await supabase
+            .from('ledger_entries')
+            .select('amount, currency_code, exchange_rate, entry_type')
+            .in('payment_id', paymentIds)
+            .eq('entry_type', 'income'); // Only payments count
+        ledgerEntries = data || [];
+    }
 
-    // Calculate Normalized Total Paid
-    const ledgerSum = (ledgerRes.data || []).reduce((sum, entry) => {
+    // 4. Calculate Normalized Total
+    const totalPaid = ledgerEntries.reduce((sum, entry) => {
         const amount = Number(entry.amount);
         
-        // If currency matches target, add raw amount
+        // Exact Match: Payment in EUR vs Debt in EUR -> Direct Add
         if (entry.currency_code === targetCurrency) {
             return sum + amount;
         }
-        
-        // If currency differs, apply rate
-        // Case: Debt is EUR, Payment is TRY. Rate 0.02.
-        // 1000 TL * 0.02 = 20 EUR.
-        // If rate is missing/0, fallback to 1 (safety), but ledger usually has it.
+
+        // Mismatch: Payment in TL vs Debt in EUR -> Apply Rate
+        // If rate is 0.02, then 1000 TL becomes 20 EUR
         const rate = entry.exchange_rate && entry.exchange_rate > 0 ? Number(entry.exchange_rate) : 1;
+        
+        // If the rate is weirdly 1 but currencies differ, checking logic:
+        // (Usually happens on bad import). We assume rate 1 means no conversion intended unless explicitly set.
+        // But here we TRUST the ledger rate.
         return sum + (amount * rate);
     }, 0);
 
     setUnitDetails({
       dues: duesRes.data || [],
-      payments: paymentsRes.data || [],
-      ledgerSumNormalized: ledgerSum
+      payments: payments,
+      totalPaidNormalized: totalPaid 
     });
     
     setLoadingDetails(false);
@@ -340,8 +359,8 @@ export default function Units() {
 
                                   const totalDues = unitDetails.dues.reduce((sum, due) => sum + Number(due.total_amount), 0);
                                   
-                                  // ✅ FIX: Use the carefully calculated ledger sum
-                                  const totalPaid = unitDetails.ledgerSumNormalized;
+                                  // ✅ USE THE CALCULATED NORMALIZED TOTAL
+                                  const totalPaid = unitDetails.totalPaidNormalized;
 
                                   const totalDebt = openingBalance + totalDues - totalPaid;
                                   const totalAmountDue = totalDues + openingBalance;
@@ -477,9 +496,16 @@ export default function Units() {
                                             className="p-3 bg-white rounded-lg border border-gray-200"
                                           >
                                             <div className="flex justify-between items-start mb-2">
-                                              <span className="text-sm font-medium text-green-600">
-                                                {formatCurrency(Number(payment.amount), payment.currency_code)}
-                                              </span>
+                                              <div>
+                                                <span className="text-sm font-medium text-green-600 block">
+                                                  {formatCurrency(Number(payment.amount), payment.currency_code)}
+                                                </span>
+                                                {payment.currency_code !== unitDetails.dues[0]?.currency_code && payment.exchange_rate && (
+                                                  <span className="text-xs text-gray-400 block mt-0.5">
+                                                    Rate: {payment.exchange_rate}
+                                                  </span>
+                                                )}
+                                              </div>
                                               <span className="text-xs text-gray-500">
                                                 {format(new Date(payment.payment_date), 'MMM d, yyyy')}
                                               </span>
@@ -541,7 +567,6 @@ export default function Units() {
   );
 }
 
-// ... (UnitEditModal remains unchanged) ...
 interface UnitEditModalProps {
   unit: Unit | null;
   unitTypes: UnitType[];
