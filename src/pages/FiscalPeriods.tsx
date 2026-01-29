@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import {
   Calendar, Plus, Check, Clock, Archive, Loader2,
-  AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt, DollarSign,
+  AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt, DollarSign
 } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
@@ -61,10 +61,10 @@ interface SetDuesModalProps {
   onSet: () => void;
 }
 
-// --- NEW INTERFACE FOR EXTRA FEE MODAL ---
+// --- NEW INTERFACE ---
 interface ExtraFeeModalProps {
   siteId: string;
-  activePeriodId: string; // We need the active period ID to link the debt
+  activePeriodId: string;
   onClose: () => void;
 }
 
@@ -94,7 +94,7 @@ export default function FiscalPeriods() {
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [showSetDuesModal, setShowSetDuesModal] = useState(false);
   
-  // --- NEW STATE FOR EXTRA FEE ---
+  // --- NEW STATE ---
   const [showExtraFeeModal, setShowExtraFeeModal] = useState(false);
 
   const [editingCategory, setEditingCategory] = useState<BudgetCategory | null>(null);
@@ -103,7 +103,7 @@ export default function FiscalPeriods() {
 
   const isAdmin = currentRole?.role === 'admin';
 
-  // Find the currently active period
+  // Find active period for Extra Fee logic
   const activePeriod = periods.find(p => p.status === 'active');
 
   useEffect(() => {
@@ -222,42 +222,38 @@ export default function FiscalPeriods() {
           <h1 className="text-2xl font-bold text-gray-900">Financial Periods</h1>
           <p className="text-gray-600">Manage budget cycles and year-end rollover</p>
         </div>
-        <div className="flex gap-2">
-          {isAdmin && (
-            <>
-              {/* --- NEW EXTRA FEE BUTTON --- */}
-              <button
-                type="button"
-                onClick={() => {
-                  if (!activePeriod) {
-                    alert("You must have an 'Active' fiscal period to add fees.");
-                    return;
-                  }
-                  setShowExtraFeeModal(true);
-                }}
-                className={`flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors ${!activePeriod ? 'opacity-50 cursor-not-allowed' : ''}`}
-                disabled={!activePeriod}
-                title={!activePeriod ? "No active period found" : "Add one-time fee for all units"}
-              >
-                <DollarSign className="w-4 h-4 mr-2" />
-                Add Extra Fee
-              </button>
+        {isAdmin && (
+          <div className="flex gap-2">
+            {/* --- NEW BUTTON --- */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!activePeriod) {
+                  alert("You must have an 'Active' fiscal period to add fees.");
+                  return;
+                }
+                setShowExtraFeeModal(true);
+              }}
+              className={`flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors ${!activePeriod ? 'opacity-50 cursor-not-allowed' : ''}`}
+              disabled={!activePeriod}
+            >
+              <DollarSign className="w-4 h-4 mr-2" />
+              Add Extra Fee
+            </button>
 
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(true)}
-                className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                New Period
-              </button>
-            </>
-          )}
-        </div>
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              New Period
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* ... (Existing List Code) ... */}
         <div className="lg:col-span-1 space-y-4">
           <h3 className="font-semibold text-gray-900">All Periods</h3>
           {periods.length === 0 ? (
@@ -353,7 +349,6 @@ export default function FiscalPeriods() {
                   {budgetCategories.length > 0 ? (
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
-                        
                         const normCatName = normalizeCategory(cat.category_name);
                         const isIncome = checkIsIncome(cat.category_name);
 
@@ -588,6 +583,7 @@ export default function FiscalPeriods() {
         />
       )}
 
+      {/* ✅ BUG FIX: Removed 'activatePeriod' from here. It was causing double generation! */}
       {showSetDuesModal && selectedPeriod && currentSite && (
         <SetDuesModal
           periodId={selectedPeriod.id}
@@ -596,16 +592,17 @@ export default function FiscalPeriods() {
           onClose={() => setShowSetDuesModal(false)}
           onSet={() => {
             setShowSetDuesModal(false);
-            activatePeriod(selectedPeriod.id); 
+            fetchPeriods(); // Just refresh list
+            fetchPeriodDetails(selectedPeriod.id); // Refresh budget details
           }}
         />
       )}
 
-      {/* --- NEW MODAL COMPONENT RENDER --- */}
+      {/* --- EXTRA FEE MODAL --- */}
       {showExtraFeeModal && currentSite && activePeriod && (
         <ExtraFeeModal 
           siteId={currentSite.id} 
-          activePeriodId={activePeriod.id} // ✅ PASSING ACTIVE PERIOD
+          activePeriodId={activePeriod.id} 
           onClose={() => setShowExtraFeeModal(false)} 
         />
       )}
@@ -613,9 +610,7 @@ export default function FiscalPeriods() {
   );
 }
 
-// ... (Existing helper functions like StatusBadge, CreatePeriodModal etc. remain unchanged) ...
-// ... Copy them from your original file ...
-
+// ... HELPERS ...
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
     draft: { icon: Clock, color: 'bg-gray-100 text-gray-700', label: 'Draft' },
@@ -1480,7 +1475,6 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 }
 
 // --- NEW EXTRA FEE MODAL COMPONENT ---
-// ✅ Correctly updated to use fiscal_period_id and base_amount
 function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -1510,10 +1504,10 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) 
       // 2. Prepare inserts for Dues table
       const duesInserts = units.map(unit => ({
         unit_id: unit.id,
-        fiscal_period_id: activePeriodId, // ✅ Required by Schema
+        fiscal_period_id: activePeriodId,
         month_date: formData.due_date,
-        due_date: formData.due_date,      // ✅ Required by Schema
-        base_amount: Number(formData.amount), // ✅ Required (total_amount is generated)
+        due_date: formData.due_date,
+        base_amount: Number(formData.amount),
         currency_code: formData.currency_code,
         status: 'pending',
         description: formData.description
