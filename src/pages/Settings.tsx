@@ -424,6 +424,7 @@ export default function Settings() {
           onClose={() => setShowImportModal(false)}
           onImported={() => {
             setShowImportModal(false);
+            // Optional: refresh or navigate
           }}
         />
       )}
@@ -681,59 +682,62 @@ function ImportModal({ siteId, unitTypes, onClose, onImported }: ImportModalProp
           const jsonData = XLSX.utils.sheet_to_json(firstSheet) as any[];
 
           const unitsToInsert = [];
-          const residentsToInsert = [];
+          
+          // Create type map once for O(1) lookup
+          const typeMap = new Map(unitTypes.map(t => [t.name.toLowerCase().trim(), t.id]));
+          // Fallback type (first one in the list)
+          const defaultTypeId = unitTypes[0]?.id;
+
+          // Helper to check multiple possible headers
+          const getVal = (row: any, keys: string[]) => {
+            for (const key of keys) {
+              if (row[key] !== undefined) return row[key];
+            }
+            return '';
+          };
 
           for (const row of jsonData) {
-            const unitNumber = row['Unit Number'] || row['unit_number'];
-            const typeName = row['Type'] || row['type'];
-            const residentName = row['Resident Name'] || row['resident_name'];
-            const email = row['Email'] || row['email'];
-            const phone = row['Phone'] || row['phone'];
+            const unitNumber = String(getVal(row, ['Unit Number', 'unit_number', 'Unit No', 'No', 'Kapı No', 'Daire No', 'Numara'])).trim();
+            const typeName = String(getVal(row, ['Unit Type', 'unit_type', 'Type', 'Tip', 'Daire Tipi'])).trim();
+            const residentName = String(getVal(row, ['Owner Name', 'owner_name', 'Owner', 'Name', 'Kat Maliki', 'Ad Soyad'])).trim();
+            const email = String(getVal(row, ['Email', 'email', 'E-mail', 'Eposta'])).trim();
+            const phone = String(getVal(row, ['Phone', 'phone', 'Mobile', 'Telefon', 'Cep'])).trim();
+            const block = String(getVal(row, ['Block', 'block', 'Blok'])).trim();
+            const floor = Number(getVal(row, ['Floor', 'floor', 'Kat'])) || 0;
+            const shareRatio = Number(getVal(row, ['Share Ratio', 'share_ratio', 'Arsa Payı', 'Pay'])) || 0;
 
             if (!unitNumber) continue;
 
-            const unitType = unitTypes.find(t =>
-              t.name.toLowerCase() === typeName?.toLowerCase()
-            );
+            const unitTypeID = typeMap.get(typeName.toLowerCase()) || defaultTypeId;
 
-            if (!unitType) {
-              setError(`Unit type "${typeName}" not found. Please create it first.`);
-              setLoading(false);
-              return;
-            }
-
-            const unitId = crypto.randomUUID();
             unitsToInsert.push({
-              id: unitId,
               site_id: siteId,
-              unit_number: String(unitNumber),
-              unit_type_id: unitType.id,
+              unit_number: unitNumber,
+              block: block || null,
+              floor: floor || null,
+              share_ratio: shareRatio || 0,
+              unit_type_id: unitTypeID || null,
               owner_name: residentName || null,
+              owner_email: email || null,
+              owner_phone: phone || null,
             });
-
-            if (email) {
-              residentsToInsert.push({
-                unit_id: unitId,
-                full_name: residentName || null,
-                email: email,
-                phone: phone || null,
-              });
-            }
           }
 
           if (unitsToInsert.length > 0) {
-            await supabase.from('units').insert(unitsToInsert);
-          }
-
-          if (residentsToInsert.length > 0) {
-            await supabase.from('residents').insert(residentsToInsert);
+            const { error: insertError } = await supabase.from('units').insert(unitsToInsert);
+            if (insertError) throw insertError;
+          } else {
+            setError("No valid units found in the file.");
+            setLoading(false);
+            return;
           }
 
           setLoading(false);
           onImported();
-        } catch (err) {
+          alert(`Successfully imported ${unitsToInsert.length} units!`);
+        } catch (err: any) {
           console.error('Import error:', err);
-          setError('Failed to import data. Please check your file format.');
+          setError(`Import failed: ${err.message || 'Unknown error'}`);
           setLoading(false);
         }
       };
@@ -760,13 +764,14 @@ function ImportModal({ siteId, unitTypes, onClose, onImported }: ImportModalProp
         <div className="p-6 space-y-6">
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
             <p className="text-sm text-blue-900 font-medium mb-2">Excel File Format</p>
-            <p className="text-sm text-blue-700 mb-2">Your Excel file should have these columns:</p>
+            <p className="text-sm text-blue-700 mb-2">Your Excel file should have these columns (English or Turkish):</p>
             <ul className="text-sm text-blue-700 list-disc list-inside space-y-1">
-              <li><strong>Unit Number</strong> - The unit identifier (e.g., A1, 101)</li>
-              <li><strong>Type</strong> - Unit type name (must match existing types)</li>
-              <li><strong>Resident Name</strong> - Full name of the resident (optional)</li>
-              <li><strong>Email</strong> - Resident email (optional)</li>
-              <li><strong>Phone</strong> - Resident phone (optional)</li>
+              <li><strong>Unit Number</strong> / Kapı No (Required)</li>
+              <li><strong>Type</strong> / Tip (Matches your Unit Types)</li>
+              <li><strong>Block</strong> / Blok</li>
+              <li><strong>Owner Name</strong> / Kat Maliki</li>
+              <li><strong>Email</strong> / Eposta</li>
+              <li><strong>Phone</strong> / Telefon</li>
             </ul>
           </div>
 
@@ -820,7 +825,7 @@ function ImportModal({ siteId, unitTypes, onClose, onImported }: ImportModalProp
                 </div>
               </div>
               <p className="text-sm text-gray-500 mt-2">
-                {preview.length} rows will be imported
+                Preview of data to be imported
               </p>
             </div>
           )}
@@ -909,7 +914,7 @@ function DeleteSiteModal({ site, onClose, onDeleted }: DeleteSiteModalProps) {
                 <div className="flex items-start space-x-3">
                   <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
                   <div className="text-sm text-red-700">
-                    <p className="font-medium text-red-900 mb-2">Warning 1: Data Loss</p>
+                    <p className="font-medium text-red-900 mb-2">Warning: Data Loss</p>
                     <ul className="list-disc list-inside space-y-1">
                       <li>This will permanently delete the site: <strong>{site.name}</strong></li>
                       <li>All financial periods, budget data, and financial records will be removed</li>
@@ -932,20 +937,15 @@ function DeleteSiteModal({ site, onClose, onDeleted }: DeleteSiteModalProps) {
                 <div className="flex items-start space-x-3">
                   <AlertTriangle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
                   <div className="text-sm text-orange-700">
-                    <p className="font-medium text-orange-900 mb-2">Warning 2: Impact on Users</p>
-                    <ul className="list-disc list-inside space-y-1">
-                      <li>All residents will lose access to their accounts for this site</li>
-                      <li>Board members and administrators will no longer be able to manage this site</li>
-                      <li>Active support tickets will be closed</li>
-                      <li>Ongoing debt collection workflows will be terminated</li>
-                    </ul>
+                    <p className="font-medium text-orange-900 mb-2">Confirm Identity</p>
+                    <p>Please enter your password to confirm deletion.</p>
                   </div>
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Enter your password to confirm deletion
+                  Enter your password
                 </label>
                 <input
                   type="password"
@@ -962,10 +962,6 @@ function DeleteSiteModal({ site, onClose, onDeleted }: DeleteSiteModalProps) {
                   <p className="text-sm text-red-600 mt-2">{error}</p>
                 )}
               </div>
-
-              <p className="text-sm text-gray-600">
-                Type your password to confirm that you understand the consequences and want to proceed.
-              </p>
             </div>
           )}
         </div>
