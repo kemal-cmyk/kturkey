@@ -80,7 +80,6 @@ export default function UserManual() {
           <div className="space-y-2">
             <h3 className="font-semibold text-gray-900">Viewing Balances</h3>
             <p className="text-sm text-gray-600">
-              {/* FIXED LINE BELOW: Changed > to &gt; */}
               Go to the <strong>Units</strong> page. Click the arrow (&gt;) next to any unit to expand details. You will see:
             </p>
             <ul className="list-disc pl-5 text-sm text-gray-600 space-y-1">
