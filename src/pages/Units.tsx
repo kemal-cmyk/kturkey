@@ -331,7 +331,7 @@ export default function Units() {
                                       return sum + paymentAmount;
                                     }
                                     const rate = payment.exchange_rate || 1;
-                                    return sum + (paymentAmount / rate);
+                                    return sum + (paymentAmount * rate);
                                   }, 0);
 
                                   const totalDebt = openingBalance + totalDues - totalPaid;
