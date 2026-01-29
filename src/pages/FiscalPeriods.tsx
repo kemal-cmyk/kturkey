@@ -64,6 +64,7 @@ interface SetDuesModalProps {
 // --- NEW INTERFACE FOR EXTRA FEE MODAL ---
 interface ExtraFeeModalProps {
   siteId: string;
+  activePeriodId: string; // We need the active period ID to link the debt
   onClose: () => void;
 }
 
@@ -101,6 +102,9 @@ export default function FiscalPeriods() {
   const [actionLoading, setActionLoading] = useState(false);
 
   const isAdmin = currentRole?.role === 'admin';
+
+  // Find the currently active period
+  const activePeriod = periods.find(p => p.status === 'active');
 
   useEffect(() => {
     if (currentSite) {
@@ -187,28 +191,20 @@ export default function FiscalPeriods() {
     }).format(amount);
   };
 
-  // ✅ HELPER: Clean strings for matching (Matches BudgetVsActual Logic)
   const normalizeCategory = (str: string) => {
       return str.toLowerCase()
-          .replace('communual', 'communal') // Fix typo
-          .replace(/payments?|payment/g, '') // Remove 'payment' words
-          // KEEP 'fee' because 'Maintenance Fee' needs it
+          .replace('communual', 'communal')
+          .replace(/payments?|payment/g, '')
           .replace(/\s+/g, ' ')
           .trim();
   };
 
-  // ✅ HELPER: Determine Income vs Expense (Matches BudgetVsActual Logic)
   const checkIsIncome = (name: string) => {
       const lower = name.toLowerCase().trim();
-      
-      // Strict Income Keywords
       const incomeKeywords = ['dues', 'aidat', 'revenue', 'interest', 'deposit', 'income'];
       if (incomeKeywords.some(k => lower.includes(k))) return true;
-
-      // Special Logic for "Fee" (Maintenance Fee = Income, Accountant Fee = Expense)
       if (lower.includes('maintenance') && lower.includes('fee')) return true;
-
-      return false; // Defaults to Expense
+      return false;
   };
 
   if (loading) {
@@ -232,8 +228,16 @@ export default function FiscalPeriods() {
               {/* --- NEW EXTRA FEE BUTTON --- */}
               <button
                 type="button"
-                onClick={() => setShowExtraFeeModal(true)}
-                className="flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors"
+                onClick={() => {
+                  if (!activePeriod) {
+                    alert("You must have an 'Active' fiscal period to add fees.");
+                    return;
+                  }
+                  setShowExtraFeeModal(true);
+                }}
+                className={`flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors ${!activePeriod ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={!activePeriod}
+                title={!activePeriod ? "No active period found" : "Add one-time fee for all units"}
               >
                 <DollarSign className="w-4 h-4 mr-2" />
                 Add Extra Fee
@@ -253,6 +257,7 @@ export default function FiscalPeriods() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ... (Existing List Code) ... */}
         <div className="lg:col-span-1 space-y-4">
           <h3 className="font-semibold text-gray-900">All Periods</h3>
           {periods.length === 0 ? (
@@ -349,7 +354,6 @@ export default function FiscalPeriods() {
                     <div className="space-y-2">
                       {budgetCategories.map((cat) => {
                         
-                        // ✅ FIX: Use Smart Matching Logic
                         const normCatName = normalizeCategory(cat.category_name);
                         const isIncome = checkIsIncome(cat.category_name);
 
@@ -357,18 +361,15 @@ export default function FiscalPeriods() {
                             .filter(e => {
                                 if (e.category === 'Transfer') return false;
                                 const normEntryCat = normalizeCategory(e.category);
-                                // Check for exact match, substring match, or reverse substring match
                                 return normEntryCat === normCatName || 
                                       normEntryCat.includes(normCatName) || 
                                       normCatName.includes(normEntryCat);
                             })
                             .reduce((sum, e) => {
                                 const val = Number(e.amount_reporting_try || e.amount);
-                                // If Income Category: Collected (+), Refunds (-)
                                 if (isIncome) {
                                     return sum + (e.entry_type === 'income' ? val : -val);
                                 }
-                                // If Expense Category: Spent (+), Rebates (-)
                                 else {
                                     return sum + (e.entry_type === 'expense' ? val : -val);
                                 }
@@ -601,15 +602,19 @@ export default function FiscalPeriods() {
       )}
 
       {/* --- NEW MODAL COMPONENT RENDER --- */}
-      {showExtraFeeModal && currentSite && (
+      {showExtraFeeModal && currentSite && activePeriod && (
         <ExtraFeeModal 
           siteId={currentSite.id} 
+          activePeriodId={activePeriod.id} // ✅ PASSING ACTIVE PERIOD
           onClose={() => setShowExtraFeeModal(false)} 
         />
       )}
     </div>
   );
 }
+
+// ... (Existing helper functions like StatusBadge, CreatePeriodModal etc. remain unchanged) ...
+// ... Copy them from your original file ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -1475,7 +1480,8 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
 }
 
 // --- NEW EXTRA FEE MODAL COMPONENT ---
-function ExtraFeeModal({ siteId, onClose }: ExtraFeeModalProps) {
+// ✅ Correctly updated to use fiscal_period_id and base_amount
+function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     description: '',
@@ -1504,8 +1510,10 @@ function ExtraFeeModal({ siteId, onClose }: ExtraFeeModalProps) {
       // 2. Prepare inserts for Dues table
       const duesInserts = units.map(unit => ({
         unit_id: unit.id,
+        fiscal_period_id: activePeriodId, // ✅ Required by Schema
         month_date: formData.due_date,
-        total_amount: Number(formData.amount),
+        due_date: formData.due_date,      // ✅ Required by Schema
+        base_amount: Number(formData.amount), // ✅ Required (total_amount is generated)
         currency_code: formData.currency_code,
         status: 'pending',
         description: formData.description
