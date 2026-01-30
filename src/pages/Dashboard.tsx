@@ -45,9 +45,10 @@ export default function Dashboard() {
     myOpenTickets: 0
   });
 
-  const isAdmin = currentRole?.role === 'admin';
-  const isBoardMember = currentRole?.role === 'board_member';
-  const isHomeowner = !isAdmin && !isBoardMember;
+const isAdmin = currentRole?.role === 'admin';
+const isBoardMember = currentRole?.role === 'board_member';
+  // explicitly check if role exists to avoid showing homeowner view to uninitialized users
+const isHomeowner = currentRole && !isAdmin && !isBoardMember;
 
   // Add this safety check
   if (!loading && currentSite && !currentRole && !user) {
