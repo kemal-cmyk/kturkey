@@ -1512,7 +1512,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) 
         month_date: formData.due_date,
         due_date: formData.due_date,
         base_amount: Number(formData.amount),
-        total_amount: Number(formData.amount), // <--- ADDED THIS LINE
+        // total_amount is REMOVED because the database auto-calculates it
         currency_code: formData.currency_code,
         status: 'pending',
         description: formData.description
