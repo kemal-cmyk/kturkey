@@ -421,7 +421,10 @@ export default function FiscalPeriods() {
   );
 }
 
-// ... (Other helpers unchanged) ...
+// ... (Standard helper components: StatusBadge, CreatePeriodModal, RolloverModal, AddCategoryModal, EditCategoryModal, AddEntryModal, SetDuesModal, ExtraFeeModal) ...
+// (I will omit repeating the standard ones to save space, BUT MAKE SURE you include the NEW ManageDuesModal below)
+
+// --- PASTE THESE HELPER COMPONENTS AT THE BOTTOM OF YOUR FILE ---
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -604,7 +607,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
   );
 }
 
-// ✅ NEW MANAGE DUES MODAL COMPONENT (Allows Deleting)
+// ✅ NEW MANAGE DUES MODAL COMPONENT (Allows Deleting PAID items)
 function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
   const [debts, setDebts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -623,28 +626,33 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
     setLoading(false);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this debt? This cannot be undone.')) return;
+  const handleDelete = async (id: string, isPaid: boolean) => {
+    if (isPaid) {
+      if (!confirm('⚠️ WARNING: This debt is marked as PAID or PARTIALLY PAID.\n\nDeleting it will NOT refund the payment, but it will remove the debt record.\n\nAre you absolutely sure you want to delete it?')) return;
+    } else {
+      if (!confirm('Are you sure you want to delete this debt?')) return;
+    }
+    
     const { error } = await supabase.from('dues').delete().eq('id', id);
-    if (error) alert('Failed to delete');
+    if (error) alert('Failed to delete. (Check console for foreign key errors)');
     else fetchDebts();
   };
 
-  // ✅ NEW: Delete All Unpaid Logic
+  // ✅ NEW: Delete All Logic (Unrestricted)
   const handleDeleteAll = async () => {
-    if (!confirm('WARNING: This will delete ALL unpaid debts in this fiscal period. Are you sure?')) return;
-    if (!confirm('This cannot be undone. Click OK to confirm deletion.')) return;
+    if (!confirm('⚠️ DANGER: This will delete ALL debts in this period (both PAID and UNPAID).\n\nUse this only if you need a hard reset of billing data.\n\nAre you sure?')) return;
+    if (!confirm('Last Warning: This cannot be undone. Type OK to proceed.')) return;
 
     setLoading(true);
+    // Removed the .eq('paid_amount', 0) filter to allow full deletion
     const { error } = await supabase
       .from('dues')
       .delete()
-      .eq('fiscal_period_id', periodId)
-      .eq('paid_amount', 0); // Safety: Only unpaid
+      .eq('fiscal_period_id', periodId);
 
-    if (error) alert('Failed to delete debts. Check console.');
+    if (error) alert('Failed to delete debts. Maybe some are linked to other records? Check console.');
     else {
-      alert('All unpaid debts deleted.');
+      alert('All debts for this period have been deleted.');
       fetchDebts();
     }
     setLoading(false);
@@ -661,9 +669,9 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
         <div className="p-6 border-b border-gray-100 flex justify-between items-center">
           <h3 className="text-xl font-semibold text-gray-900">Manage Dues</h3>
           <div className="flex gap-2">
-             {/* ✅ NEW DELETE ALL BUTTON */}
+             {/* ✅ DELETE ALL BUTTON (Unrestricted) */}
              <button onClick={handleDeleteAll} className="flex items-center px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors text-sm font-medium">
-               <Trash2 className="w-4 h-4 mr-1"/> Delete All Unpaid
+               <Trash2 className="w-4 h-4 mr-1"/> Delete ALL
              </button>
              <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
           </div>
@@ -701,15 +709,14 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
                   <td className="px-6 py-3 text-gray-500">{format(new Date(d.month_date), 'dd MMM yyyy')}</td>
                   <td className="px-6 py-3">{d.description || 'Monthly Due'}</td>
                   <td className="px-6 py-3 text-right font-medium">{d.base_amount} {d.currency_code}</td>
-                  <td className="px-6 py-3 text-right text-green-600">{d.paid_amount > 0 ? d.paid_amount : '-'}</td>
+                  <td className={`px-6 py-3 text-right ${d.paid_amount > 0 ? 'text-green-600 font-bold' : 'text-gray-400'}`}>
+                    {d.paid_amount > 0 ? d.paid_amount : '-'}
+                  </td>
                   <td className="px-6 py-3 text-center">
-                    {d.paid_amount === 0 ? (
-                      <button onClick={() => handleDelete(d.id)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50">
-                        <Trash2 className="w-4 h-4"/>
-                      </button>
-                    ) : (
-                      <span className="text-gray-300 text-xs">Paid</span>
-                    )}
+                    {/* ✅ DELETE INDIVIDUAL (Unrestricted) */}
+                    <button onClick={() => handleDelete(d.id, d.paid_amount > 0)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title={d.paid_amount > 0 ? "Warning: Paid" : "Delete"}>
+                      <Trash2 className="w-4 h-4"/>
+                    </button>
                   </td>
                 </tr>
               ))}
