@@ -43,9 +43,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return data?.is_super_admin || false;
   };
 
-  const fetchSites = async (userId: string, superAdmin: boolean) => {
+const fetchSites = async (userId: string, superAdmin: boolean) => {
     let userSites: Site[] = [];
-    let roles: any[] = [];
+    let roles: UserSiteRole[] = []; // Typed correctly
 
     if (superAdmin) {
       const { data: allSites } = await supabase
@@ -57,35 +57,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       const { data: userRoles } = await supabase
         .from('user_site_roles')
-        .select('*, sites(*)')
+        .select('*, sites(*)') // Fetch role AND joined site data
         .eq('user_id', userId);
+      
       roles = userRoles || [];
-      userSites = roles.map((r: any) => r.sites).filter(Boolean);
+      // Extract the site objects from the joined data
+      userSites = roles
+        .map((r: any) => r.sites)
+        .filter((s: any) => s && s.is_active !== false) // Ensure site exists and is active
+        .sort((a, b) => a.name.localeCompare(b.name));
     }
 
     setSites(userSites);
 
+    // Logic to select the initial site and role
     if (userSites.length > 0) {
       const storedSiteId = localStorage.getItem('currentSiteId');
-      const storedSite = userSites.find(s => s.id === storedSiteId);
+      // Try to find the last visited site, otherwise default to the first one
+      const targetSite = userSites.find(s => s.id === storedSiteId) || userSites[0];
 
-      if (storedSite) {
-        setCurrentSite(storedSite);
-        if (superAdmin) {
-          setCurrentRole({ role: 'admin' } as UserSiteRole);
-        } else {
-          const role = roles.find((r: any) => r.site_id === storedSite.id);
-          setCurrentRole(role || null);
-        }
+      setCurrentSite(targetSite);
+
+      if (superAdmin) {
+        // Super admins are always 'admin' effectively
+        setCurrentRole({ role: 'admin', user_id: userId, site_id: targetSite.id } as UserSiteRole);
       } else {
-        setCurrentSite(userSites[0]);
-        if (superAdmin) {
-          setCurrentRole({ role: 'admin' } as UserSiteRole);
-        } else {
-          const role = roles.find((r: any) => r.site_id === userSites[0].id);
-          setCurrentRole(role || null);
-        }
+        // Find the specific role record for this site
+        const activeRole = roles.find((r: any) => r.site_id === targetSite.id);
+        setCurrentRole(activeRole || null);
       }
+    } else {
+      // User has no sites
+      setCurrentSite(null);
+      setCurrentRole(null);
     }
   };
 
