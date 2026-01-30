@@ -103,7 +103,7 @@ export default function FiscalPeriods() {
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [showSetDuesModal, setShowSetDuesModal] = useState(false);
   const [showExtraFeeModal, setShowExtraFeeModal] = useState(false);
-  const [showManageDuesModal, setShowManageDuesModal] = useState(false); // ✅ New Modal State
+  const [showManageDuesModal, setShowManageDuesModal] = useState(false);
 
   const [editingCategory, setEditingCategory] = useState<BudgetCategory | null>(null);
   const [addingEntryCategory, setAddingEntryCategory] = useState<BudgetCategory | null>(null);
@@ -404,12 +404,12 @@ export default function FiscalPeriods() {
           onClose={() => setShowExtraFeeModal(false)} 
           onSuccess={() => {
             setShowExtraFeeModal(false);
-            fetchPeriodDetails(activePeriod.id); // Refresh details instantly
+            fetchPeriodDetails(activePeriod.id);
           }}
         />
       )}
 
-      {/* ✅ NEW MANAGE DUES MODAL */}
+      {/* ✅ MANAGE DUES MODAL */}
       {showManageDuesModal && selectedPeriod && currentSite && (
         <ManageDuesModal
           periodId={selectedPeriod.id}
@@ -577,28 +577,178 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
   );
 }
 
-// --- UPDATED EXTRA FEE MODAL ---
+// --- UPDATED EXTRA FEE MODAL WITH REPLACE OPTION ---
 function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeModalProps) {
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ description: '', amount: '', currency_code: 'TRY', due_date: format(new Date(), 'yyyy-MM-dd') });
+  const [replaceExisting, setReplaceExisting] = useState(false); // ✅ New State
+  const [formData, setFormData] = useState({
+    description: '',
+    amount: '',
+    currency_code: 'TRY',
+    due_date: format(new Date(), 'yyyy-MM-dd'),
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.amount || !formData.description) return;
-    if(!confirm(`Are you sure you want to add a debt of ${formData.amount} ${formData.currency_code} to ALL units?`)) return;
+    
+    let confirmMessage = `Are you sure you want to add a debt of ${formData.amount} ${formData.currency_code} to ALL units?`;
+    if (replaceExisting) {
+      confirmMessage = `⚠️ WARNING: You are about to DELETE all existing debts with the title "${formData.description}" (Paid & Unpaid) and create new ones.\n\nAre you sure you want to proceed?`;
+    }
+
+    if(!confirm(confirmMessage)) return;
+
     setLoading(true);
     try {
-      const { data: units, error: unitError } = await supabase.from('units').select('id').eq('site_id', siteId);
+      // 1. (Optional) Delete Existing
+      if (replaceExisting) {
+        const { error: deleteError } = await supabase
+          .from('dues')
+          .delete()
+          .eq('fiscal_period_id', activePeriodId)
+          .eq('description', formData.description); // Only matches exact title
+        
+        if (deleteError) throw deleteError;
+      }
+
+      // 2. Get all units
+      const { data: units, error: unitError } = await supabase
+        .from('units')
+        .select('id')
+        .eq('site_id', siteId);
+
       if (unitError) throw unitError;
       if (!units || units.length === 0) throw new Error('No units found');
-      const duesInserts = units.map(unit => ({ unit_id: unit.id, fiscal_period_id: activePeriodId, month_date: formData.due_date, due_date: formData.due_date, base_amount: Number(formData.amount), currency_code: formData.currency_code, status: 'pending', description: formData.description }));
-      const { error: insertError } = await supabase.from('dues').insert(duesInserts);
-      if (insertError) { if (insertError.code === '23505') throw new Error('A debt already exists for this exact date. Please select a different day (e.g. tomorrow).'); throw insertError; }
-      alert('Extra fees created successfully!');
-      onSuccess(); onClose();
-    } catch (error: any) { console.error('Error:', error); alert(`Failed: ${error.message}`); } finally { setLoading(false); }
+
+      // 3. Prepare inserts
+      const duesInserts = units.map(unit => ({
+        unit_id: unit.id,
+        fiscal_period_id: activePeriodId,
+        month_date: formData.due_date,
+        due_date: formData.due_date,
+        base_amount: Number(formData.amount),
+        currency_code: formData.currency_code,
+        status: 'pending',
+        description: formData.description
+      }));
+
+      // 4. Batch insert
+      const { error: insertError } = await supabase
+        .from('dues')
+        .insert(duesInserts);
+
+      if (insertError) { 
+        if (insertError.code === '23505') {
+          throw new Error('A debt already exists for this exact date/unit. Try checking "Delete existing" or change the date.'); 
+        }
+        throw insertError; 
+      }
+
+      alert('Extra fees processed successfully!');
+      onSuccess(); 
+      onClose();
+
+    } catch (error: any) {
+      console.error('Error:', error);
+      alert(`Failed: ${error.message}`);
+    } finally {
+      setLoading(false);
+    }
   };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border-t-4 border-amber-500"><div className="flex justify-between items-center mb-6"><h3 className="text-lg font-bold text-gray-900 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-amber-600" />Add One-Time Extra Fee</h3><button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button></div><form onSubmit={handleSubmit} className="space-y-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Description</label><input type="text" required value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full px-3 py-2 border rounded-lg" placeholder="Roof Repair" /></div><div className="grid grid-cols-2 gap-4"><div><label className="block text-sm font-medium text-gray-700 mb-1">Amount</label><input type="number" required value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full px-3 py-2 border rounded-lg" placeholder="0.00" /></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Currency</label><select value={formData.currency_code} onChange={e => setFormData({...formData, currency_code: e.target.value})} className="w-full px-3 py-2 border rounded-lg">{CURRENCIES.map(curr => (<option key={curr.code} value={curr.code}>{curr.code}</option>))}</select></div></div><div><label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label><input type="date" required value={formData.due_date} onChange={e => setFormData({...formData, due_date: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /><p className="text-xs text-gray-500 mt-1">Tip: Choose different day than monthly dues.</p></div><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={onClose} className="px-4 py-2 text-gray-600">Cancel</button><button type="submit" disabled={loading} className="flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50">{loading && <Loader2 className="w-4 h-4 animate-spin mr-2" />}Create Debt</button></div></form></div></div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 border-t-4 border-amber-500">
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-amber-600" />
+            Add One-Time Extra Fee
+          </h3>
+          <button onClick={onClose}><X className="w-5 h-5 text-gray-400" /></button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Description / Title</label>
+            <input 
+              type="text" 
+              required 
+              value={formData.description} 
+              onChange={e => setFormData({...formData, description: e.target.value})} 
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500" 
+              placeholder="e.g., Roof Repair 2024" 
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Amount (Per Unit)</label>
+              <input 
+                type="number" 
+                required 
+                value={formData.amount} 
+                onChange={e => setFormData({...formData, amount: e.target.value})} 
+                className="w-full px-3 py-2 border rounded-lg" 
+                placeholder="0.00" 
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
+              <select 
+                value={formData.currency_code} 
+                onChange={e => setFormData({...formData, currency_code: e.target.value})} 
+                className="w-full px-3 py-2 border rounded-lg"
+              >
+                {CURRENCIES.map(curr => (
+                  <option key={curr.code} value={curr.code}>{curr.code}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+            <input 
+              type="date" 
+              required 
+              value={formData.due_date} 
+              onChange={e => setFormData({...formData, due_date: e.target.value})} 
+              className="w-full px-3 py-2 border rounded-lg" 
+            />
+          </div>
+
+          {/* ✅ REPLACEMENT CHECKBOX */}
+          <div className="bg-red-50 p-3 rounded-lg border border-red-100">
+            <label className="flex items-start cursor-pointer">
+              <input 
+                type="checkbox" 
+                checked={replaceExisting}
+                onChange={e => setReplaceExisting(e.target.checked)}
+                className="mt-1 w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500"
+              />
+              <span className="ml-2 text-sm text-red-800">
+                <strong>Overwrite Mode:</strong> Delete ANY existing fees (even paid ones) that match this Description ("{formData.description || '... '}") before adding new ones.
+              </span>
+            </label>
+          </div>
+
+          <div className="flex justify-end gap-3 mt-6">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600">Cancel</button>
+            <button 
+              type="submit" 
+              disabled={loading}
+              className={`flex items-center px-4 py-2 text-white rounded-lg disabled:opacity-50 transition-colors ${
+                replaceExisting ? 'bg-red-600 hover:bg-red-700' : 'bg-amber-600 hover:bg-amber-700'
+              }`}
+            >
+              {loading && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              {replaceExisting ? 'Replace Debts' : 'Create Debts'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }
 
