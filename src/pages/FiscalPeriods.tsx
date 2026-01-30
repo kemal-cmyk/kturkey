@@ -5,7 +5,7 @@ import {
   Calendar, Plus, Check, Clock, Archive, Loader2,
   AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt, DollarSign,
 } from 'lucide-react';
-import { format, addMonths, subDays } from 'date-fns'; // ✅ Added subDays
+import { format, addMonths, subDays } from 'date-fns';
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { EXPENSE_CATEGORIES } from '../lib/constants';
 
@@ -64,8 +64,9 @@ interface SetDuesModalProps {
 // --- NEW INTERFACE FOR EXTRA FEE MODAL ---
 interface ExtraFeeModalProps {
   siteId: string;
-  activePeriodId: string; // We need the active period ID to link the debt
+  activePeriodId: string;
   onClose: () => void;
+  onSuccess: () => void; // ✅ Added to force refresh
 }
 
 interface Unit {
@@ -606,6 +607,11 @@ export default function FiscalPeriods() {
           siteId={currentSite.id} 
           activePeriodId={activePeriod.id} 
           onClose={() => setShowExtraFeeModal(false)} 
+          // ✅ FIX: Force Refresh
+          onSuccess={() => {
+            setShowExtraFeeModal(false);
+            fetchPeriodDetails(activePeriod.id); 
+          }}
         />
       )}
     </div>
@@ -647,7 +653,7 @@ function CreatePeriodModal({ siteId, onClose, onCreated }: CreatePeriodModalProp
     setLoading(true);
 
     const startDate = new Date(startYear, startMonth - 1, 1);
-    // ✅ FIX: Use subDays so end date is strictly 1 year minus 1 day (e.g., Jan 1 - Dec 31)
+    // ✅ FIX: Use subDays to prevent 13th month issue
     const endDate = subDays(addMonths(startDate, 12), 1); 
     const periodName = `${format(startDate, 'MMM yyyy')} - ${format(endDate, 'MMM yyyy')}`;
 
@@ -1476,9 +1482,9 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
   );
 }
 
-// --- NEW EXTRA FEE MODAL COMPONENT ---
+// --- UPDATED EXTRA FEE MODAL COMPONENT ---
 // ✅ Correctly updated to use fiscal_period_id and base_amount AND total_amount
-function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) {
+function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeModalProps) {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     description: '',
@@ -1491,11 +1497,10 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) 
     e.preventDefault();
     if (!formData.amount || !formData.description) return;
     
-    if(!confirm(`Are you sure you want to add a debt of ${formData.amount} ${formData.currency_code} to ALL units for "${formData.description}"?`)) return;
+    if(!confirm(`Are you sure you want to add a debt of ${formData.amount} ${formData.currency_code} to ALL units?`)) return;
 
     setLoading(true);
     try {
-      // 1. Get all units in this site
       const { data: units, error: unitError } = await supabase
         .from('units')
         .select('id')
@@ -1504,33 +1509,37 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) 
       if (unitError) throw unitError;
       if (!units || units.length === 0) throw new Error('No units found');
 
-      // 2. Prepare inserts for Dues table
-      // ✅ FIX: Explicitly include total_amount to prevent "invisible" debts
       const duesInserts = units.map(unit => ({
         unit_id: unit.id,
         fiscal_period_id: activePeriodId,
         month_date: formData.due_date,
         due_date: formData.due_date,
         base_amount: Number(formData.amount),
-        // total_amount is REMOVED because the database auto-calculates it
+        // total_amount removed (generated)
         currency_code: formData.currency_code,
         status: 'pending',
         description: formData.description
       }));
 
-      // 3. Batch insert
       const { error: insertError } = await supabase
         .from('dues')
         .insert(duesInserts);
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        // ✅ Catch Unique Violation specifically
+        if (insertError.code === '23505') {
+          throw new Error('A debt already exists for this exact date. Please select a different day (e.g. tomorrow).');
+        }
+        throw insertError;
+      }
 
       alert('Extra fees created successfully!');
-      onClose();
+      onSuccess(); // ✅ Trigger parent refresh
+      onClose(); // Close modal on success
 
     } catch (error: any) {
       console.error('Error creating extra fees:', error);
-      alert(`Failed to create extra fees: ${error.message || 'Unknown error'}`);
+      alert(`Failed: ${error.message || 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
@@ -1548,42 +1557,24 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) 
         </div>
         
         <p className="text-sm text-gray-600 mb-4 bg-amber-50 p-3 rounded border border-amber-100">
-          This will create a <strong>one-time debt</strong> for EVERY unit in the site. 
-          Use this for specific expenses like roof repairs, painting, or emergency funds.
+          This will create a <strong>one-time debt</strong> for EVERY unit. 
+          Use this for specific expenses like roof repairs or painting.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Description / Title</label>
-            <input 
-              type="text" 
-              required 
-              value={formData.description} 
-              onChange={e => setFormData({...formData, description: e.target.value})} 
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500" 
-              placeholder="e.g., Roof Repair 2024" 
-            />
+            <input type="text" required value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full px-3 py-2 border rounded-lg" placeholder="e.g., Roof Repair 2024" />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Amount (Per Unit)</label>
-              <input 
-                type="number" 
-                required 
-                value={formData.amount} 
-                onChange={e => setFormData({...formData, amount: e.target.value})} 
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500" 
-                placeholder="0.00" 
-              />
+              <input type="number" required value={formData.amount} onChange={e => setFormData({...formData, amount: e.target.value})} className="w-full px-3 py-2 border rounded-lg" placeholder="0.00" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
-              <select 
-                value={formData.currency_code} 
-                onChange={e => setFormData({...formData, currency_code: e.target.value})} 
-                className="w-full px-3 py-2 border rounded-lg"
-              >
+              <select value={formData.currency_code} onChange={e => setFormData({...formData, currency_code: e.target.value})} className="w-full px-3 py-2 border rounded-lg">
                 {CURRENCIES.map(curr => (
                   <option key={curr.code} value={curr.code}>{curr.code}</option>
                 ))}
@@ -1593,24 +1584,14 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose }: ExtraFeeModalProps) 
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
-            <input 
-              type="date" 
-              required 
-              value={formData.due_date} 
-              onChange={e => setFormData({...formData, due_date: e.target.value})} 
-              className="w-full px-3 py-2 border rounded-lg" 
-            />
+            <input type="date" required value={formData.due_date} onChange={e => setFormData({...formData, due_date: e.target.value})} className="w-full px-3 py-2 border rounded-lg" />
+            <p className="text-xs text-gray-500 mt-1">Tip: Choose a different day than monthly dues (usually 1st) to avoid errors.</p>
           </div>
 
           <div className="flex justify-end gap-3 mt-6">
             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600">Cancel</button>
-            <button 
-              type="submit" 
-              disabled={loading}
-              className="flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50"
-            >
-              {loading && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
-              Create Debt for All
+            <button type="submit" disabled={loading} className="flex items-center px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50">
+              {loading && <Loader2 className="w-4 h-4 animate-spin mr-2" />} Create Debt
             </button>
           </div>
         </form>
