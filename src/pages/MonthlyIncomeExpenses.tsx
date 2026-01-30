@@ -88,18 +88,11 @@ export default function MonthlyIncomeExpenses() {
       }).slice(0, 12);
       setMonths(monthsInPeriod);
 
-      // ✅ FIX: Fetch rates to calculate proper opening balance
-      const { data: accounts } = await supabase
-        .from('accounts')
-        .select('initial_balance, currency_code, initial_exchange_rate')
-        .eq('site_id', currentSite.id)
-        .eq('is_active', true);
-
-      // ✅ FIX: Calculate Total Opening Balance in TL
-      const totalInitialBalance = accounts?.reduce((sum, acc) => {
-          const rate = acc.currency_code === 'TRY' ? 1 : (acc.initial_exchange_rate || 1);
-          return sum + (Number(acc.initial_balance) * rate);
-      }, 0) || 0;
+    // ✅ USE SECURE RPC
+      const { data: totalInitialBalance } = await supabase
+        .rpc('get_site_opening_balance', { p_site_id: currentSite.id });
+      
+      setOpeningBalance(totalInitialBalance || 0);
       
       setOpeningBalance(totalInitialBalance);
 
