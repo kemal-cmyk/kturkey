@@ -30,6 +30,7 @@ export default function MyAccount() {
     id: string;
     month_date: string;
     total_amount: number;
+    base_amount: number; // Added base_amount to type definition
     paid_amount: number;
     status: string;
     currency_code: string;
@@ -284,26 +285,32 @@ export default function MyAccount() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {unpaidDues.map((due) => (
-                    <tr key={due.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-3">
-                        <p className="font-medium text-gray-900">
-                          {format(new Date(due.month_date), 'MMMM yyyy')}
-                        </p>
-                        <span className={`text-xs px-2 py-0.5 rounded-full capitalize inline-block mt-1 ${
-                          due.status === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
-                        }`}>
-                          {due.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-3 text-right text-gray-500">
-                      {formatCurrency(Number(due.total_amount) || Number(due.base_amount), due.currency_code)}
-                      </td>
-                      <td className="px-6 py-3 text-right font-bold text-red-600">
-                      {formatCurrency((Number(due.total_amount) || Number(due.base_amount)) - Number(due.paid_amount), due.currency_code)}
-                    </td>
-                    </tr>
-                  ))}
+                  {unpaidDues.map((due) => {
+                    // ✅ FIX: Calculate safe amounts, defaulting to base if total is 0
+                    const safeTotal = Number(due.total_amount) || Number(due.base_amount) || 0;
+                    const remaining = safeTotal - (Number(due.paid_amount) || 0);
+
+                    return (
+                      <tr key={due.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-3">
+                          <p className="font-medium text-gray-900">
+                            {format(new Date(due.month_date), 'MMMM yyyy')}
+                          </p>
+                          <span className={`text-xs px-2 py-0.5 rounded-full capitalize inline-block mt-1 ${
+                            due.status === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {due.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-3 text-right text-gray-500">
+                          {formatCurrency(safeTotal, due.currency_code)}
+                        </td>
+                        <td className="px-6 py-3 text-right font-bold text-red-600">
+                          {formatCurrency(remaining, due.currency_code)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             )}
