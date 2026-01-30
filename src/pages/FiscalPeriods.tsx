@@ -5,7 +5,7 @@ import {
   Calendar, Plus, Check, Clock, Archive, Loader2,
   AlertTriangle, ArrowRight, Edit2, Trash2, X, Receipt, DollarSign,
 } from 'lucide-react';
-import { format, addMonths } from 'date-fns';
+import { format, addMonths, subDays } from 'date-fns'; // ✅ Added subDays
 import type { FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { EXPENSE_CATEGORIES } from '../lib/constants';
 
@@ -64,7 +64,7 @@ interface SetDuesModalProps {
 // --- NEW INTERFACE FOR EXTRA FEE MODAL ---
 interface ExtraFeeModalProps {
   siteId: string;
-  activePeriodId: string; // We need the active period ID to link the debt
+  activePeriodId: string; 
   onClose: () => void;
 }
 
@@ -257,7 +257,6 @@ export default function FiscalPeriods() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* ... (Existing List Code) ... */}
         <div className="lg:col-span-1 space-y-4">
           <h3 className="font-semibold text-gray-900">All Periods</h3>
           {periods.length === 0 ? (
@@ -588,7 +587,6 @@ export default function FiscalPeriods() {
         />
       )}
 
-      {/* ✅ BUG FIX: Removed 'activatePeriod' from here. Now just refreshes! */}
       {showSetDuesModal && selectedPeriod && currentSite && (
         <SetDuesModal
           periodId={selectedPeriod.id}
@@ -597,13 +595,12 @@ export default function FiscalPeriods() {
           onClose={() => setShowSetDuesModal(false)}
           onSet={() => {
             setShowSetDuesModal(false);
-            fetchPeriods(); // Just refresh list
-            fetchPeriodDetails(selectedPeriod.id); // Refresh budget details
+            fetchPeriods(); 
+            fetchPeriodDetails(selectedPeriod.id); 
           }}
         />
       )}
 
-      {/* --- EXTRA FEE MODAL --- */}
       {showExtraFeeModal && currentSite && activePeriod && (
         <ExtraFeeModal 
           siteId={currentSite.id} 
@@ -615,9 +612,7 @@ export default function FiscalPeriods() {
   );
 }
 
-// ... (Existing helper functions remain unchanged) ...
-// Copy the rest of your file (StatusBadge, CreatePeriodModal, etc.) here. 
-// I am including them below for completeness to ensure you have a full working file.
+// ... (Helper components remain unchanged below) ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -654,8 +649,9 @@ function CreatePeriodModal({ siteId, onClose, onCreated }: CreatePeriodModalProp
     setLoading(true);
 
     const startDate = new Date(startYear, startMonth - 1, 1);
-    const endDate = addMonths(startDate, 12);
-    const periodName = `${format(startDate, 'MMM yyyy')} - ${format(addMonths(startDate, 11), 'MMM yyyy')}`;
+    // ✅ FIX: Use subDays to prevent 13th month issue
+    const endDate = subDays(addMonths(startDate, 12), 1);
+    const periodName = `${format(startDate, 'MMM yyyy')} - ${format(endDate, 'MMM yyyy')}`;
 
     const { data: period, error } = await supabase
       .from('fiscal_periods')
