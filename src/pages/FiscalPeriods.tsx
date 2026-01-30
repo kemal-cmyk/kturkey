@@ -103,7 +103,7 @@ export default function FiscalPeriods() {
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [showSetDuesModal, setShowSetDuesModal] = useState(false);
   const [showExtraFeeModal, setShowExtraFeeModal] = useState(false);
-  const [showManageDuesModal, setShowManageDuesModal] = useState(false);
+  const [showManageDuesModal, setShowManageDuesModal] = useState(false); // ✅ New Modal State
 
   const [editingCategory, setEditingCategory] = useState<BudgetCategory | null>(null);
   const [addingEntryCategory, setAddingEntryCategory] = useState<BudgetCategory | null>(null);
@@ -404,7 +404,7 @@ export default function FiscalPeriods() {
           onClose={() => setShowExtraFeeModal(false)} 
           onSuccess={() => {
             setShowExtraFeeModal(false);
-            fetchPeriodDetails(activePeriod.id);
+            fetchPeriodDetails(activePeriod.id); // Refresh details instantly
           }}
         />
       )}
@@ -420,11 +420,6 @@ export default function FiscalPeriods() {
     </div>
   );
 }
-
-// ... (Standard helper components: StatusBadge, CreatePeriodModal, RolloverModal, AddCategoryModal, EditCategoryModal, AddEntryModal, SetDuesModal, ExtraFeeModal) ...
-// (I will omit repeating the standard ones to save space, BUT MAKE SURE you include the NEW ManageDuesModal below)
-
-// --- PASTE THESE HELPER COMPONENTS AT THE BOTTOM OF YOUR FILE ---
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -644,7 +639,6 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
     if (!confirm('Last Warning: This cannot be undone. Type OK to proceed.')) return;
 
     setLoading(true);
-    // Removed the .eq('paid_amount', 0) filter to allow full deletion
     const { error } = await supabase
       .from('dues')
       .delete()
