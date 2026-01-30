@@ -31,7 +31,7 @@ export default function Ledger() {
   const [loading, setLoading] = useState(true);
   
   // Store ALL entries to ensure balance history is correct
-  const [allEntries, setAllEntries] = useState<LedgerEntry[]>([]); 
+  const [allEntries, setAllEntries] = useState<any[]>([]); 
   
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [fiscalPeriods, setFiscalPeriods] = useState<FiscalPeriod[]>([]);
@@ -44,7 +44,6 @@ export default function Ledger() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [units, setUnits] = useState<Array<{ id: string; unit_number: string; block: string | null; owner_name: string | null }>>([]);
 
-  // --- NEW STATE FOR MULTI-SELECT ---
   const [selectedEntries, setSelectedEntries] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -65,7 +64,6 @@ export default function Ledger() {
 
   const [unitDuesCurrency, setUnitDuesCurrency] = useState<string | null>(null);
 
-  // Helper to detect FX Transfer
   const getTransferDetails = () => {
     const fromAcc = accounts.find(a => a.id === newEntry.from_account_id);
     const toAcc = accounts.find(a => a.id === newEntry.to_account_id);
@@ -130,9 +128,19 @@ export default function Ledger() {
   const fetchEntries = async () => {
     if (!currentSite) return;
 
+    // ✅ FIX: Fetch linked payment and unit info to allow proper export
     const { data } = await supabase
       .from('ledger_entries')
-      .select('*')
+      .select(`
+        *,
+        payments (
+          unit_id,
+          units (
+            unit_number,
+            block
+          )
+        )
+      `)
       .eq('site_id', currentSite.id)
       .order('entry_date', { ascending: true }); 
 
@@ -192,7 +200,7 @@ export default function Ledger() {
     }).format(amount);
   };
 
-  // --- NEW: BULK DELETE FUNCTIONS ---
+  // --- BULK ACTIONS ---
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedEntries(displayEntries.map(e => e.id));
@@ -225,7 +233,7 @@ export default function Ledger() {
     } else {
       setSelectedEntries([]);
       await fetchEntries();
-      await fetchData(); // Force refresh accounts
+      await fetchData(); 
     }
     setIsDeleting(false);
   };
@@ -233,7 +241,7 @@ export default function Ledger() {
   const handleDeleteAll = async () => {
     if (!currentSite) return;
     const confirmText = "DELETE-ALL";
-    const userText = prompt(`⚠️ WARNING: This will delete ALL ledger entries for this site.\n\nType "${confirmText}" to confirm:`);
+    const userText = prompt(`⚠️ WARNING: This will delete ALL ledger entries for this site.\n\nThis is useful if you want to re-import everything cleanly.\n\nType "${confirmText}" to confirm:`);
     
     if (userText !== confirmText) return;
 
@@ -241,7 +249,7 @@ export default function Ledger() {
     const { error } = await supabase
         .from('ledger_entries')
         .delete()
-        .eq('site_id', currentSite.id); // Safer than just deleting all
+        .eq('site_id', currentSite.id);
 
     if (error) {
       console.error('Error deleting all:', error);
@@ -253,7 +261,6 @@ export default function Ledger() {
     }
     setIsDeleting(false);
   };
-  // ----------------------------------
 
   const handleAddEntry = async () => {
     if (!currentSite || !user) return;
@@ -552,10 +559,19 @@ export default function Ledger() {
 
   const { fromAcc, toAcc, isFX } = getTransferDetails();
 
+  // ✅ UPDATED EXPORT: Includes Unit Number
   const handleExport = () => {
     const exportData = displayEntries.map(entry => {
       const account = accounts.find(a => a.id === entry.account_id);
       const amountTry = Number(entry.amount_reporting_try || entry.amount);
+      
+      // Extract Unit Number if linked
+      let unitNumber = '';
+      if (entry.payments && entry.payments.units) {
+        const u = entry.payments.units;
+        unitNumber = u.block ? `${u.block}-${u.unit_number}` : u.unit_number;
+      }
+
       return {
         Date: format(new Date(entry.entry_date), 'dd.MM.yyyy'),
         Type: entry.entry_type,
@@ -567,6 +583,7 @@ export default function Ledger() {
         'Original Amount': entry.amount,
         'Currency': entry.currency_code,
         'Rate': entry.exchange_rate,
+        'Unit Number': unitNumber, // ✅ CRITICAL FOR RE-IMPORT
         'Account Balance': entry.accountBalance,
         'Global Balance': entry.totalBalance
       };
@@ -609,7 +626,9 @@ export default function Ledger() {
         </div>
       </div>
 
-      {/* ... (Account Cards & Summary Stats - No Changes Here) ... */}
+      {/* ... (Rest of UI - unchanged) ... */}
+      
+      {/* (Abbreviated rendering for brevity - same as original file from here down) */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Accounts</h2>
@@ -681,7 +700,6 @@ export default function Ledger() {
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                {/* CHECKBOX HEADER */}
                 <th className="px-4 py-3 w-10 text-center">
                   <input 
                     type="checkbox" 
@@ -707,7 +725,6 @@ export default function Ledger() {
                   <tr className="bg-blue-50/50">
                     <td className="px-4 py-2"></td>
                     <td className="px-4 py-2" colSpan={9}>
-                      {/* ... (Existing Add Entry Row) ... */}
                       <div className="flex flex-wrap items-center gap-4">
                         <div className="flex gap-2">
                           <button type="button" onClick={() => setNewEntry({ ...newEntry, entry_type: 'expense', category: budgetCategories[0]?.category_name || '', from_account_id: '', to_account_id: '' })} className={`px-4 py-1.5 text-sm rounded font-medium ${newEntry.entry_type === 'expense' ? 'bg-red-500 text-white' : 'bg-gray-200 text-gray-600'}`}>Expense</button>
@@ -729,7 +746,6 @@ export default function Ledger() {
                       </div>
                     </td>
                   </tr>
-                  {/* ... (Existing Transfer Row Logic) ... */}
                   {newEntry.entry_type === 'transfer' ? (
                     <>
                     <tr className="bg-blue-50/50">
@@ -836,9 +852,8 @@ export default function Ledger() {
   );
 }
 
-// ----------------------------------------------------------------------
-// UPDATED ENTRY ROW (With Checkbox)
-// ----------------------------------------------------------------------
+// ... (Rest of components EntryRow and AccountFormModal - Unchanged) ...
+// (I will include them in the full file copy for safety, but they are identical to before)
 
 interface EntryRowProps {
   entry: LedgerEntry;
@@ -892,7 +907,7 @@ function EntryRow({
     return (
       <>
         <tr className="bg-yellow-50">
-          <td className="px-4 py-2"></td> {/* Empty for checkbox column */}
+          <td className="px-4 py-2"></td>
           <td className="px-4 py-2"><input type="date" value={editData.entry_date} onChange={(e) => setEditData({ ...editData, entry_date: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"/></td>
           <td className="px-4 py-2"><select value={editData.account_id} onChange={(e) => setEditData({ ...editData, account_id: e.target.value })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white"><option value="">Select</option>{accounts.map(acc => (<option key={acc.id} value={acc.id}>{acc.account_name}</option>))}</select></td>
           <td className="px-4 py-2"><select value={editData.category} onChange={(e) => setEditData({ ...editData, category: e.target.value, unit_id: '' })} className="w-full px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-[#002561] bg-white">{categories.map(cat => (<option key={cat.id} value={cat.category_name}>{cat.category_name}</option>))}<option value="Other">Other</option></select></td>
@@ -962,7 +977,6 @@ function EntryRow({
   );
 }
 
-// ... (AccountFormModal remains the same as before, no changes needed there) ...
 interface AccountFormModalProps {
   account: Account | null;
   onClose: () => void;
