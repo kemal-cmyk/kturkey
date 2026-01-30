@@ -777,70 +777,41 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
     } else {
       if (!confirm('Are you sure you want to delete this debt?')) return;
     }
-    
+
+    // Unlink from payments and ledger_entries first
+    await supabase.from('payments').update({ due_id: null }).eq('due_id', id);
+    await supabase.from('ledger_entries').update({ due_id: null }).eq('due_id', id);
+
+    // Now delete the due
     const { error } = await supabase.from('dues').delete().eq('id', id);
-    if (error) alert('Failed to delete. (Check console for foreign key errors)');
-    else fetchDebts();
+    if (error) {
+      console.error('Delete error:', error);
+      alert(`Failed to delete: ${error.message}\n\nDetails: ${error.details || 'None'}`);
+    } else {
+      fetchDebts();
+    }
   };
 
-  // ✅ NEW: Delete All Logic (Unrestricted) - Safe Force Delete
+  // ✅ NEW: Delete All Logic (Unrestricted) - Safe Force Delete using RPC
   const handleDeleteAll = async () => {
     if (!confirm('⚠️ DANGER: This will delete ALL debts in this period (both PAID and UNPAID).\n\nUse this only if you need a hard reset of billing data.\n\nAre you sure?')) return;
     if (!confirm('Last Warning: This cannot be undone. Type OK to proceed.')) return;
 
     setLoading(true);
 
-    try {
-      // Step 1: Fetch all due IDs in this period
-      const { data: dueRecords, error: fetchError } = await supabase
-        .from('dues')
-        .select('id')
-        .eq('fiscal_period_id', periodId);
+    const { error } = await supabase.rpc('admin_force_delete_dues', {
+      p_period_id: periodId
+    });
 
-      if (fetchError) {
-        alert(`Failed to fetch dues: ${fetchError.message}\n\nDetails: ${fetchError.details || 'None'}`);
-        setLoading(false);
-        return;
-      }
-
-      if (!dueRecords || dueRecords.length === 0) {
-        alert('No dues found in this period.');
-        setLoading(false);
-        return;
-      }
-
-      const dueIds = dueRecords.map(d => d.id);
-
-      // Step 2: Unlink these dues from payments table
-      const { error: unlinkError } = await supabase
-        .from('payments')
-        .update({ due_id: null })
-        .in('due_id', dueIds);
-
-      if (unlinkError) {
-        alert(`Failed to unlink payments: ${unlinkError.message}\n\nDetails: ${unlinkError.details || 'None'}`);
-        setLoading(false);
-        return;
-      }
-
-      // Step 3: Now delete the dues
-      const { error: deleteError } = await supabase
-        .from('dues')
-        .delete()
-        .eq('fiscal_period_id', periodId);
-
-      if (deleteError) {
-        alert(`Failed to delete dues: ${deleteError.message}\n\nDetails: ${deleteError.details || 'None'}`);
-      } else {
-        alert(`Successfully deleted ${dueIds.length} debt records. Payment history has been preserved (unlinked).`);
-        fetchDebts();
-      }
-    } catch (err: any) {
-      alert(`Unexpected error: ${err.message || 'Unknown error'}`);
-      console.error(err);
-    } finally {
-      setLoading(false);
+    if (error) {
+      console.error('Delete error:', error);
+      alert(`Failed to delete: ${error.message}\n\nDetails: ${error.details || 'None'}`);
+    } else {
+      alert('All debts for this period have been successfully unlinked and deleted. Payment history has been preserved.');
+      fetchDebts();
     }
+
+    setLoading(false);
   };
 
   const filteredDebts = debts.filter(d => 
