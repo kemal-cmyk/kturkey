@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage, Language } from '../contexts/LanguageContext';
@@ -16,6 +16,7 @@ import {
   Menu,
   X,
   ChevronDown,
+  ChevronRight,
   Home,
   Ticket,
   Plus,
@@ -24,7 +25,7 @@ import {
   UserCog,
   Globe,
   Shield,
-  BookOpen, // <--- ADDED IMPORT
+  BookOpen,
 } from 'lucide-react';
 
 interface LayoutProps {
@@ -53,27 +54,70 @@ export default function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [siteDropdownOpen, setSiteDropdownOpen] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
+  
+  // State for collapsible groups
+  const [financeOpen, setFinanceOpen] = useState(true);
 
   const isAdmin = isSuperAdmin || currentRole?.role === 'admin';
 
-  const navigation = [
+  // Define Navigation Structure with Groups
+  const rawNavigation = [
     { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Units', href: '/units', icon: Home },
-    { name: 'Resident Statement', href: '/resident-statement', icon: FileText },
     { name: 'Residents', href: '/residents', icon: Users },
-    { name: 'Financial Periods', href: '/fiscal-periods', icon: Calendar },
-    { name: 'Budget', href: '/budget', icon: Wallet },
-    { name: 'Ledger', href: '/ledger', icon: Receipt },
-    { name: 'Budget vs Actual', href: '/budget-vs-actual', icon: FileText },
-    { name: 'Monthly Income & Expenses', href: '/monthly-income-expenses', icon: BarChart2 },
-    { name: 'Debt Tracking', href: '/debt-tracking', icon: AlertTriangle },
+    { name: 'Resident Statement', href: '/resident-statement', icon: FileText },
+    
+    // FINANCE GROUP
+    {
+      name: 'Finance',
+      icon: Wallet, // Group Icon
+      type: 'group',
+      isOpen: financeOpen,
+      toggle: () => setFinanceOpen(!financeOpen),
+      children: [
+        { name: 'Ledger', href: '/ledger', icon: Receipt },
+        { name: 'Budget', href: '/budget', icon: Wallet },
+        { name: 'Financial Periods', href: '/fiscal-periods', icon: Calendar },
+        { name: 'Budget vs Actual', href: '/budget-vs-actual', icon: FileText },
+        { name: 'Income & Expenses', href: '/monthly-income-expenses', icon: BarChart2 },
+        { name: 'Debt Tracking', href: '/debt-tracking', icon: AlertTriangle },
+      ]
+    },
+
     { name: 'Support Tickets', href: '/tickets', icon: Ticket },
     { name: 'My Account', href: '/my-account', icon: Users },
     { name: 'User Management', href: '/user-management', icon: UserCog },
     { name: 'Language', href: '/language-settings', icon: Globe },
     { name: 'Role & Permissions', href: '/role-settings', icon: Shield },
     { name: 'Settings', href: '/settings', icon: Settings },
-  ].filter(item => canAccess(item.href));
+  ];
+
+  // Filter Navigation based on permissions
+  const navigation = rawNavigation.reduce((acc: any[], item: any) => {
+    if (item.type === 'group') {
+      // Filter children of the group
+      const filteredChildren = item.children.filter((child: any) => canAccess(child.href));
+      
+      // Only show group if it has accessible children
+      if (filteredChildren.length > 0) {
+        acc.push({ ...item, children: filteredChildren });
+      }
+    } else {
+      // Normal Item check
+      if (canAccess(item.href)) {
+        acc.push(item);
+      }
+    }
+    return acc;
+  }, []);
+
+  // Auto-expand Finance group if we are currently on a finance page
+  useEffect(() => {
+    const financePaths = ['/ledger', '/budget', '/fiscal-periods', '/budget-vs-actual', '/monthly-income-expenses', '/debt-tracking'];
+    if (financePaths.some(path => location.pathname.startsWith(path))) {
+      setFinanceOpen(true);
+    }
+  }, [location.pathname]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -93,6 +137,7 @@ export default function Layout({ children }: LayoutProps) {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-[#002561] px-4 py-3 flex items-center justify-between">
         <button
           onClick={() => setSidebarOpen(true)}
@@ -137,12 +182,14 @@ export default function Layout({ children }: LayoutProps) {
         />
       )}
 
+      {/* Sidebar */}
       <aside
         className={`fixed top-0 left-0 z-50 h-full w-64 bg-[#002561] transform transition-transform duration-200 ease-in-out lg:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         <div className="flex flex-col h-full">
+          {/* Sidebar Header */}
           <div className="flex items-center justify-between px-6 py-5 border-b border-white/10">
             <div className="flex items-center space-x-3">
               <Building2 className="w-8 h-8 text-white" />
@@ -156,6 +203,7 @@ export default function Layout({ children }: LayoutProps) {
             </button>
           </div>
 
+          {/* Site Selector */}
           <div className="px-4 py-4 border-b border-white/10">
             {sites.length > 0 ? (
               <div className="relative">
@@ -217,8 +265,58 @@ export default function Layout({ children }: LayoutProps) {
             </div>
           </div>
 
+          {/* Navigation Links */}
           <nav className="flex-1 px-4 py-4 space-y-1 overflow-y-auto">
-            {navigation.map(item => {
+            {navigation.map((item: any) => {
+              // RENDER GROUP
+              if (item.type === 'group') {
+                const Icon = item.icon;
+                return (
+                  <div key={item.name} className="space-y-1">
+                    <button
+                      onClick={item.toggle}
+                      className="w-full flex items-center justify-between px-3 py-2.5 text-white/90 hover:bg-white/10 hover:text-white rounded-lg transition-colors group"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <Icon className="w-5 h-5" />
+                        <span className="font-medium">{item.name}</span>
+                      </div>
+                      {item.isOpen ? (
+                        <ChevronDown className="w-4 h-4 text-white/50" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-white/50" />
+                      )}
+                    </button>
+                    
+                    {/* Children */}
+                    {item.isOpen && (
+                      <div className="pl-4 space-y-1 mt-1 border-l-2 border-white/10 ml-4">
+                        {item.children.map((child: any) => {
+                          const ChildIcon = child.icon;
+                          const isChildActive = location.pathname === child.href;
+                          return (
+                            <Link
+                              key={child.name}
+                              to={child.href}
+                              onClick={() => setSidebarOpen(false)}
+                              className={`flex items-center space-x-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                                isChildActive
+                                  ? 'bg-white text-[#002561] font-medium'
+                                  : 'text-white/70 hover:bg-white/10 hover:text-white'
+                              }`}
+                            >
+                              <ChildIcon className="w-4 h-4" />
+                              <span>{child.name}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              // RENDER SINGLE ITEM
               const Icon = item.icon;
               const isActive = location.pathname === item.href;
               return (
@@ -238,7 +336,7 @@ export default function Layout({ children }: LayoutProps) {
               );
             })}
 
-            {/* ADDED: User Manual Link - always visible at the bottom of navigation */}
+            {/* User Manual Link */}
             <Link
               to="/manual"
               onClick={() => setSidebarOpen(false)}
@@ -253,6 +351,7 @@ export default function Layout({ children }: LayoutProps) {
             </Link>
           </nav>
 
+          {/* Sidebar Footer (User Profile) */}
           <div className="px-4 py-4 border-t border-white/10">
             <div className="flex items-center space-x-3 px-3 py-2 mb-2">
               <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-white text-sm font-medium">
