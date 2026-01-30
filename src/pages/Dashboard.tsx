@@ -49,6 +49,16 @@ export default function Dashboard() {
   const isBoardMember = currentRole?.role === 'board_member';
   const isHomeowner = !isAdmin && !isBoardMember;
 
+  // Add this safety check
+  if (!loading && currentSite && !currentRole && !user) {
+     return (
+       <div className="p-12 text-center">
+         <Loader2 className="w-8 h-8 animate-spin text-gray-400 mx-auto mb-4" />
+         <p className="text-gray-500">Loading your profile...</p>
+       </div>
+     );
+  }
+  
   useEffect(() => {
     if (currentSite) {
       fetchDashboardData();
