@@ -601,15 +601,41 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
 
     setLoading(true);
     try {
-      // 1. (Optional) Delete Existing
+      // 1. (Optional) Delete Existing - Safe deletion with unlinking
       if (replaceExisting) {
-        const { error: deleteError } = await supabase
+        // First, get all dues IDs that match this description
+        const { data: matchingDues, error: fetchError } = await supabase
           .from('dues')
-          .delete()
+          .select('id')
           .eq('fiscal_period_id', activePeriodId)
-          .eq('description', formData.description); // Only matches exact title
-        
-        if (deleteError) throw deleteError;
+          .eq('description', formData.description);
+
+        if (fetchError) throw fetchError;
+
+        if (matchingDues && matchingDues.length > 0) {
+          const dueIds = matchingDues.map(d => d.id);
+
+          // Unlink from payments table
+          await supabase
+            .from('payments')
+            .update({ due_id: null })
+            .in('due_id', dueIds);
+
+          // Unlink from ledger_entries table
+          await supabase
+            .from('ledger_entries')
+            .update({ due_id: null })
+            .in('due_id', dueIds);
+
+          // Now safely delete the dues
+          const { error: deleteError } = await supabase
+            .from('dues')
+            .delete()
+            .eq('fiscal_period_id', activePeriodId)
+            .eq('description', formData.description);
+
+          if (deleteError) throw deleteError;
+        }
       }
 
       // 2. Get all units
