@@ -297,11 +297,11 @@ export default function MyAccount() {
                         </span>
                       </td>
                       <td className="px-6 py-3 text-right text-gray-500">
-                        {formatCurrency(Number(due.total_amount), due.currency_code)}
+                      {formatCurrency(Number(due.total_amount) || Number(due.base_amount), due.currency_code)}
                       </td>
                       <td className="px-6 py-3 text-right font-bold text-red-600">
-                        {formatCurrency(Number(due.total_amount) - Number(due.paid_amount), due.currency_code)}
-                      </td>
+                      {formatCurrency((Number(due.total_amount) || Number(due.base_amount)) - Number(due.paid_amount), due.currency_code)}
+                    </td>
                     </tr>
                   ))}
                 </tbody>
