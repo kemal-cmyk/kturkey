@@ -15,7 +15,6 @@ import Budget from './pages/Budget';
 import Ledger from './pages/Ledger';
 import ImportLedger from './pages/ImportLedger';
 import DebtTracking from './pages/DebtTracking';
-import Reports from './pages/Reports';
 import BudgetVsActual from './pages/BudgetVsActual';
 import MonthlyIncomeExpenses from './pages/MonthlyIncomeExpenses';
 import Tickets from './pages/Tickets';
@@ -175,16 +174,6 @@ function AppRoutes() {
           <PrivateRoute>
             <Layout>
               <DebtTracking />
-            </Layout>
-          </PrivateRoute>
-        }
-      />
-      <Route
-        path="/reports"
-        element={
-          <PrivateRoute>
-            <Layout>
-              <Reports />
             </Layout>
           </PrivateRoute>
         }
