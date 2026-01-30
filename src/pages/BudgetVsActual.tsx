@@ -71,7 +71,7 @@ export default function BudgetVsActual() {
     if (!selectedPeriodId) return;
     setLoading(true);
 
-    const [categoriesRes, entriesRes, accountsRes] = await Promise.all([
+    const [categoriesRes, entriesRes, balanceRes] = await Promise.all([
       supabase
         .from('budget_categories')
         .select('*')
@@ -81,12 +81,18 @@ export default function BudgetVsActual() {
         .from('ledger_entries')
         .select('*')
         .eq('fiscal_period_id', selectedPeriodId),
-      supabase
-        .from('accounts')
-        .select('initial_balance, currency_code, initial_exchange_rate')
-        .eq('site_id', currentSite?.id)
-        .eq('is_active', true)
+      // ✅ USE SECURE RPC
+      supabase.rpc('get_site_opening_balance', { p_site_id: currentSite?.id })
     ]);
+
+    setBudgetCategories(categoriesRes.data || []);
+    setLedgerEntries(entriesRes.data || []);
+
+    // ✅ DIRECTLY SET BALANCE
+    setOpeningBalance(balanceRes.data || 0);
+
+    calculateReportLines(categoriesRes.data || [], entriesRes.data || []);
+    setLoading(false);
 
     setBudgetCategories(categoriesRes.data || []);
     setLedgerEntries(entriesRes.data || []);
