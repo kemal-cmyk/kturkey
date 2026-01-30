@@ -9,15 +9,16 @@ import {
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Users,
-  Building2, Calendar, Receipt, ArrowRight, Loader2,
-  ChevronRight, Scale, MessageSquare, Home
+  Building2, Receipt, ArrowRight, Loader2,
+  ChevronRight, Scale, MessageSquare, Home,
+  Wallet, CheckCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 import type { SiteFinancialSummary, DebtAlert, FiscalPeriod, BudgetCategory, LedgerEntry } from '../types/database';
 import { DEBT_STAGES } from '../lib/constants';
 
 export default function Dashboard() {
-  const { currentSite, currentRole } = useAuth();
+  const { user, currentSite, currentRole } = useAuth();
   const [loading, setLoading] = useState(true);
   
   // Financial Data State
@@ -36,21 +37,30 @@ export default function Dashboard() {
     totalResidents: 0
   });
 
+  // Homeowner Specific State
+  const [myStats, setMyStats] = useState({
+    unitId: '',
+    unitNumber: '',
+    balance: 0,
+    myOpenTickets: 0
+  });
+
   const isAdmin = currentRole?.role === 'admin';
   const isBoardMember = currentRole?.role === 'board_member';
+  const isHomeowner = !isAdmin && !isBoardMember;
 
   useEffect(() => {
     if (currentSite) {
       fetchDashboardData();
     }
-  }, [currentSite]);
+  }, [currentSite, user]);
 
   const fetchDashboardData = async () => {
     if (!currentSite) return;
     setLoading(true);
 
     try {
-      // 1. Fetch Active Period & Financials
+      // 1. Fetch Active Period & Financials (Common for ALL roles)
       const { data: periods } = await supabase
         .from('fiscal_periods')
         .select('*')
@@ -61,7 +71,7 @@ export default function Dashboard() {
       setActivePeriod(periods);
 
       if (periods) {
-        // Financial Summary (Still useful for Total Budget)
+        // Financial Summary
         const { data: summaryData } = await supabase
           .from('site_financial_summary')
           .select('*')
@@ -88,6 +98,7 @@ export default function Dashboard() {
 
         setPeriodEntries(ledgerData || []);
 
+        // Monthly Data Calculation
         const grouped: Record<string, { income: number; expense: number }> = {};
         ledgerData?.forEach(entry => {
           const month = format(new Date(entry.entry_date), 'MMM');
@@ -106,8 +117,9 @@ export default function Dashboard() {
         })));
       }
 
-      // 2. Fetch Debt Alerts (Admin Only)
+      // 2. DATA FOR ADMINS
       if (isAdmin || isBoardMember) {
+        // Debt Alerts
         const { data: alerts } = await supabase
           .from('debt_alerts')
           .select('*')
@@ -115,32 +127,78 @@ export default function Dashboard() {
           .order('stage', { ascending: false })
           .limit(10);
         setDebtAlerts(alerts || []);
+
+        // Operational Stats
+        const { count: ticketCount } = await supabase
+          .from('support_tickets')
+          .select('*', { count: 'exact', head: true })
+          .eq('site_id', currentSite.id)
+          .eq('status', 'open');
+
+        const { data: units } = await supabase
+          .from('units')
+          .select('id, owner_id')
+          .eq('site_id', currentSite.id);
+        
+        const totalUnits = units?.length || 0;
+        const occupiedUnits = units?.filter(u => u.owner_id !== null).length || 0;
+
+        const { data: users } = await supabase
+          .rpc('get_site_users', { p_site_id: currentSite.id });
+
+        setOpsStats({
+          openTickets: ticketCount || 0,
+          totalUnits,
+          occupiedUnits,
+          totalResidents: users ? users.length : 0
+        });
       }
 
-      // 3. Fetch Operational Stats
-      const { count: ticketCount } = await supabase
-        .from('support_tickets')
-        .select('*', { count: 'exact', head: true })
-        .eq('site_id', currentSite.id)
-        .eq('status', 'open');
+      // 3. DATA FOR HOMEOWNERS (My Stats)
+      if (isHomeowner && user) {
+        // A. Find My Unit
+        const { data: myUnit } = await supabase
+          .from('units')
+          .select('id, unit_number, opening_balance')
+          .eq('site_id', currentSite.id)
+          .eq('owner_id', user.id)
+          .maybeSingle();
 
-      const { data: units } = await supabase
-        .from('units')
-        .select('id, owner_id')
-        .eq('site_id', currentSite.id);
-      
-      const totalUnits = units?.length || 0;
-      const occupiedUnits = units?.filter(u => u.owner_id !== null).length || 0;
+        if (myUnit) {
+          // B. Calculate Balance (Using simplified version of Statement Logic)
+          // Get Dues
+          const { data: myDues } = await supabase
+            .from('dues')
+            .select('total_amount, base_amount')
+            .eq('unit_id', myUnit.id)
+            .neq('status', 'cancelled');
+          
+          const totalDues = myDues?.reduce((sum, d) => sum + (Number(d.total_amount) || Number(d.base_amount) || 0), 0) || 0;
 
-      const { data: users } = await supabase
-        .rpc('get_site_users', { p_site_id: currentSite.id });
+          // Get Payments
+          const { data: myPayments } = await supabase
+            .from('payments')
+            .select('amount')
+            .eq('unit_id', myUnit.id);
+          
+          const totalPaid = myPayments?.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
 
-      setOpsStats({
-        openTickets: ticketCount || 0,
-        totalUnits,
-        occupiedUnits,
-        totalResidents: users ? users.length : 0
-      });
+          // Get My Open Tickets
+          const { count: myTicketCount } = await supabase
+            .from('support_tickets')
+            .select('*', { count: 'exact', head: true })
+            .eq('site_id', currentSite.id)
+            .eq('reporter_id', user.id)
+            .eq('status', 'open');
+
+          setMyStats({
+            unitId: myUnit.id,
+            unitNumber: myUnit.unit_number,
+            balance: (myUnit.opening_balance || 0) + totalDues - totalPaid,
+            myOpenTickets: myTicketCount || 0
+          });
+        }
+      }
 
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -160,13 +218,7 @@ export default function Dashboard() {
 
   const COLORS = ['#002561', '#0066cc', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
   
-  const occupancyRate = opsStats.totalUnits > 0 
-    ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
-    : 0;
-
   // --- LIVE CALCULATIONS ---
-  
-  // 1. Calculate Totals directly from Ledger Entries (Accurate Math)
   const totalCollectedLive = periodEntries
     .filter(e => e.entry_type === 'income')
     .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
@@ -175,7 +227,7 @@ export default function Dashboard() {
     .filter(e => e.entry_type === 'expense')
     .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
-  // 2. Prepare Chart Data
+  // Chart Data
   const budgetData = budgetCategories.map((cat, idx) => {
     const actualSpent = periodEntries
       .filter(e => e.category === cat.category_name)
@@ -203,12 +255,7 @@ export default function Dashboard() {
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-12 text-center">
           <Building2 className="w-16 h-16 text-gray-300 mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-gray-900 mb-2">No Site Selected</h2>
-          <p className="text-gray-600 mb-6">Please select a site from the sidebar or create a new one.</p>
-          {isAdmin && (
-            <Link to="/sites/new" className="inline-flex items-center px-4 py-2 bg-[#002561] text-white rounded-lg hover:bg-[#003380] transition-colors">
-              Add New Site <ArrowRight className="w-4 h-4 ml-2" />
-            </Link>
-          )}
+          <p className="text-gray-600 mb-6">Please select a site from the sidebar.</p>
         </div>
       </div>
     );
@@ -222,9 +269,149 @@ export default function Dashboard() {
     );
   }
 
+  // ==========================================
+  // VIEW 1: HOMEOWNER DASHBOARD
+  // ==========================================
+  if (isHomeowner) {
+    return (
+      <div className="p-6 space-y-6">
+        {/* Welcome Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Welcome Home</h1>
+          <p className="text-gray-600">
+            {currentSite.name} {myStats.unitNumber ? `- Unit ${myStats.unitNumber}` : ''}
+          </p>
+        </div>
+
+        {/* My Status Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Balance Card */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-gray-500 font-medium mb-1">My Current Balance</p>
+                <h2 className={`text-3xl font-bold ${myStats.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  {formatCurrency(Math.abs(myStats.balance))}
+                </h2>
+                <p className="text-sm mt-1 text-gray-400">
+                  {myStats.balance > 0 ? 'Payment Required' : 'Account in Good Standing'}
+                </p>
+              </div>
+              <div className={`p-3 rounded-lg ${myStats.balance > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                <Wallet className="w-6 h-6" />
+              </div>
+            </div>
+            {myStats.unitId && (
+              <Link 
+                to={`/resident-statement?unit_id=${myStats.unitId}`} 
+                className="mt-6 inline-flex items-center text-sm font-medium text-[#002561] hover:underline"
+              >
+                View Full Statement <ArrowRight className="w-4 h-4 ml-1" />
+              </Link>
+            )}
+          </div>
+
+          {/* Tickets Card */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-gray-500 font-medium mb-1">My Open Tickets</p>
+                <h2 className="text-3xl font-bold text-gray-900">{myStats.myOpenTickets}</h2>
+                <p className="text-sm mt-1 text-gray-400">Active Requests</p>
+              </div>
+              <div className="p-3 rounded-lg bg-blue-50 text-blue-600">
+                <MessageSquare className="w-6 h-6" />
+              </div>
+            </div>
+            <Link 
+              to="/tickets" 
+              className="mt-6 inline-flex items-center text-sm font-medium text-[#002561] hover:underline"
+            >
+              Manage Tickets <ArrowRight className="w-4 h-4 ml-1" />
+            </Link>
+          </div>
+
+          {/* Community Info Card */}
+          <div className="bg-[#002561] text-white rounded-2xl shadow-sm p-6 relative overflow-hidden">
+            <div className="relative z-10">
+              <p className="text-blue-200 font-medium mb-1">Community Update</p>
+              <h3 className="text-xl font-bold mb-2">Transparency Report</h3>
+              <p className="text-sm text-blue-100 mb-4 opacity-90">
+                View how the budget is being utilized for {activePeriod?.name}.
+              </p>
+              <div className="flex items-center text-xs text-blue-200">
+                <CheckCircle className="w-4 h-4 mr-1" /> Updated Today
+              </div>
+            </div>
+            {/* Decorative Icon */}
+            <Building2 className="absolute -bottom-4 -right-4 w-32 h-32 text-white/5" />
+          </div>
+        </div>
+
+        {/* Transparency Section (Replaces Old Reports Page) */}
+        <div className="border-t border-gray-200 pt-6">
+          <h2 className="text-lg font-bold text-gray-900 mb-4">Site Financial Transparency</h2>
+          
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <StatCard title="Total Budget" value={formatCurrency(summary?.total_budget || 0)} icon={<Receipt className="w-5 h-5" />} color="bg-gray-600" />
+            <StatCard title="Collected (YTD)" value={formatCurrency(totalCollectedLive)} icon={<TrendingUp className="w-5 h-5" />} color="bg-green-600" />
+            <StatCard title="Total Spent" value={formatCurrency(totalSpentLive)} icon={<TrendingDown className="w-5 h-5" />} color="bg-orange-500" />
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Expenses by Category</h3>
+              {pieData.length > 0 ? (
+                <div className="h-[250px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={2} dataKey="value">
+                        {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                      <Legend />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-[250px] flex items-center justify-center text-gray-400">No data available</div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+              <h3 className="text-sm font-semibold text-gray-900 mb-4">Budget vs Actual</h3>
+              {budgetData.length > 0 ? (
+                <div className="h-[250px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={budgetData} layout="vertical" margin={{ left: 80 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
+                      <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={75} />
+                      <Tooltip formatter={(value: number) => formatCurrency(value)} />
+                      <Bar dataKey="planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
+                      <Bar dataKey="actual" fill="#002561" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <div className="h-[250px] flex items-center justify-center text-gray-400">No data available</div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================
+  // VIEW 2: ADMIN DASHBOARD (Existing + Refined)
+  // ==========================================
+  const occupancyRate = opsStats.totalUnits > 0 
+    ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
+    : 0;
+
   return (
     <div className="p-6 space-y-6">
-      
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -240,7 +427,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* SECTION 1: Operational Overview */}
+      {/* Operational Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Link to="/tickets" className="block">
           <StatCard
@@ -269,7 +456,7 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      {/* SECTION 2: Financial Overview (UPDATED WITH LIVE CALCULATIONS) */}
+      {/* Financial Overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
@@ -293,7 +480,7 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* SECTION 3: Charts & Alerts */}
+      {/* Charts & Alerts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Budget Bar Chart */}
@@ -360,7 +547,7 @@ export default function Dashboard() {
       )}
 
       {/* Debt Alerts */}
-      {(isAdmin || isBoardMember) && debtAlerts.length > 0 && (
+      {debtAlerts.length > 0 && (
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
             <div className="flex items-center space-x-2">
