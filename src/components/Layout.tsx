@@ -67,7 +67,6 @@ export default function Layout({ children }: LayoutProps) {
     { name: 'Budget vs Actual', href: '/budget-vs-actual', icon: FileText },
     { name: 'Monthly Income & Expenses', href: '/monthly-income-expenses', icon: BarChart2 },
     { name: 'Debt Tracking', href: '/debt-tracking', icon: AlertTriangle },
-    { name: 'Reports', href: '/reports', icon: FileText },
     { name: 'Support Tickets', href: '/tickets', icon: Ticket },
     { name: 'My Account', href: '/my-account', icon: Users },
     { name: 'User Management', href: '/user-management', icon: UserCog },
