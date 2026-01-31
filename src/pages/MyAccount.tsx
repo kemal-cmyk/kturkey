@@ -130,8 +130,14 @@ export default function MyAccount() {
   // Use currency from the most recent due, or site default
   const displayCurrency = dues[0]?.currency_code || currentSite?.default_currency || 'TRY';
 
-  // Filter for Unpaid/Partial items
-  const unpaidDues = dues.filter(d => d.status !== 'paid');
+  // ✅ FIX: Filter Unpaid Dues by calculating remaining balance manually
+  // This ensures that if paid_amount equals total, it hides, even if status is stale.
+  const unpaidDues = dues.filter(d => {
+    const total = Number(d.total_amount) || Number(d.base_amount) || 0;
+    const paid = Number(d.paid_amount) || 0;
+    const remaining = total - paid;
+    return remaining > 0.1; // Filter out tiny floating point differences
+  });
 
   if (loading) {
     return (
@@ -286,7 +292,7 @@ export default function MyAccount() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {unpaidDues.map((due) => {
-                    // ✅ FIX: Calculate safe amounts, defaulting to base if total is 0
+                    // Calculate safe amounts, defaulting to base if total is 0
                     const safeTotal = Number(due.total_amount) || Number(due.base_amount) || 0;
                     const remaining = safeTotal - (Number(due.paid_amount) || 0);
 
