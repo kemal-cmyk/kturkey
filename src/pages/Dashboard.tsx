@@ -113,6 +113,9 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
         // Monthly Data Calculation
         const grouped: Record<string, { income: number; expense: number }> = {};
         ledgerData?.forEach(entry => {
+          // ✅ Skip transfers in monthly chart data too
+          if (entry.category === 'Transfer') return;
+
           const month = format(new Date(entry.entry_date), 'MMM');
           if (!grouped[month]) grouped[month] = { income: 0, expense: 0 };
           
@@ -241,12 +244,13 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
   const COLORS = ['#002561', '#0066cc', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
   
   // --- LIVE CALCULATIONS ---
+  // ✅ FIX: Exclude 'Transfer' category to prevent double counting internal movements
   const totalCollectedLive = periodEntries
-    .filter(e => e.entry_type === 'income')
+    .filter(e => e.entry_type === 'income' && e.category !== 'Transfer')
     .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
   const totalSpentLive = periodEntries
-    .filter(e => e.entry_type === 'expense')
+    .filter(e => e.entry_type === 'expense' && e.category !== 'Transfer')
     .reduce((sum, e) => sum + Number(e.amount_reporting_try || e.amount), 0);
 
   // Chart Data
@@ -444,7 +448,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
   }
 
   // ==========================================
-  // VIEW 2: ADMIN DASHBOARD (Existing + Refined)
+  // VIEW 2: ADMIN DASHBOARD
   // ==========================================
   const occupancyRate = opsStats.totalUnits > 0 
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
