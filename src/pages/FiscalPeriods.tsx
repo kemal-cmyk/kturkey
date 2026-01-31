@@ -17,7 +17,7 @@ interface Account {
   currency_code: string;
 }
 
-// Interface definitions for sub-components
+// Interface definitions
 interface CreatePeriodModalProps {
   siteId: string;
   onClose: () => void;
@@ -365,7 +365,6 @@ export default function FiscalPeriods() {
                         <div><p className="font-medium text-blue-900">Monthly Dues Setup</p><p className="text-sm text-blue-700 mt-1">Set monthly due amounts for all units in this period.</p></div>
                       </div>
                       <div className="flex gap-2">
-                        {/* ✅ MANAGE DEBTS BUTTON */}
                         <button onClick={() => setShowManageDuesModal(true)} className="px-4 py-2 bg-white border border-blue-200 text-blue-700 rounded-lg hover:bg-blue-50 transition-colors whitespace-nowrap flex items-center">
                           <List className="w-4 h-4 mr-2"/> Manage Debts
                         </button>
@@ -409,7 +408,6 @@ export default function FiscalPeriods() {
         />
       )}
 
-      {/* ✅ MANAGE DUES MODAL */}
       {showManageDuesModal && selectedPeriod && currentSite && (
         <ManageDuesModal
           periodId={selectedPeriod.id}
@@ -420,6 +418,8 @@ export default function FiscalPeriods() {
     </div>
   );
 }
+
+// ... Helper Components ...
 
 function StatusBadge({ status, large = false }: { status: string; large?: boolean }) {
   const config: Record<string, { icon: any; color: string; label: string }> = {
@@ -618,7 +618,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
 
     setLoading(true);
     try {
-      // 2. DELETE OLD (Uses the new smart SQL function with case-insensitive matching)
+      // 2. DELETE OLD (Uses the new smart SQL function)
       if (replaceExisting) {
         const { error: deleteError } = await supabase.rpc('admin_force_delete_dues', {
           p_period_id: activePeriodId,
@@ -657,14 +657,14 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
         .from('dues')
         .insert(duesInserts);
 
-      if (insertError) {
+      if (insertError) { 
         if (insertError.code === '23505') {
-          throw new Error('A debt already exists for this date. Check "Overwrite Mode" or change the date.');
+          throw new Error('A debt already exists for this exact date/unit. Try checking "Delete existing" or change the date.'); 
         }
-        throw insertError;
+        throw insertError; 
       }
 
-      alert('Success! Dues have been updated.');
+      alert('Extra fees processed successfully!');
       onSuccess(); 
       onClose();
 
@@ -695,8 +695,8 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
               required 
               value={formData.description} 
               onChange={e => setFormData({...formData, description: e.target.value})} 
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
-              placeholder="e.g., Roof Repair"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500" 
+              placeholder="e.g., Roof Repair 2024" 
             />
           </div>
 
@@ -737,7 +737,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
             />
           </div>
 
-          {/* ✅ REPLACEMENT CHECKBOX */}
+          {/* CHECKBOX */}
           <div className="bg-red-50 p-3 rounded-lg border border-red-100">
             <label className="flex items-start cursor-pointer">
               <input 
@@ -813,11 +813,11 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
     if (!confirm('Last Warning: This cannot be undone. Type OK to proceed.')) return;
 
     setLoading(true);
-    // Direct delete all for period
-    const { error } = await supabase
-      .from('dues')
-      .delete()
-      .eq('fiscal_period_id', periodId);
+    // Direct delete all for period using the smart function (safe delete)
+    const { error } = await supabase.rpc('admin_force_delete_dues', {
+      p_period_id: periodId,
+      p_description: null 
+    });
 
     if (error) alert(`Failed to delete debts: ${error.message}`);
     else {
