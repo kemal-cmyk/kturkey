@@ -128,7 +128,7 @@ export default function Ledger() {
   const fetchEntries = async () => {
     if (!currentSite) return;
 
-    // ✅ FIX: Fetch linked payment and unit info to allow proper export
+    // Fetch linked payment and unit info
     const { data } = await supabase
       .from('ledger_entries')
       .select(`
@@ -516,14 +516,18 @@ export default function Ledger() {
     };
   });
 
-  // ✅ FIX: Calculate Period Totals BEFORE filtering by Type/Search
-  // This ensures the top summary cards always reflect the full fiscal period selected
+  // ✅ FIX: Calculate Period Totals (IGNORE TRANSFERS for Income/Expense Report)
   const periodEntriesForSummary = entriesWithCalculatedBalances.filter(entry => {
     return !selectedPeriod || entry.fiscal_period_id === selectedPeriod;
   });
 
   const periodTotals = periodEntriesForSummary.reduce(
     (acc, entry) => {
+      // ✅ Skip transfers in the P&L Summary (they cancel out and just inflate numbers)
+      if (entry.category === 'Transfer' || entry.entry_type === 'transfer') {
+        return acc;
+      }
+
       const amountTry = Number(entry.amount_reporting_try || entry.amount);
       if (entry.entry_type === 'income') {
         acc.income += amountTry;
@@ -535,7 +539,7 @@ export default function Ledger() {
     { income: 0, expense: 0 }
   );
 
-  // Now filter for display in table (Type + Search)
+  // Filter for display in table (Type + Search) - Transfers ARE shown in the table
   const filteredEntriesWithBalance = entriesWithCalculatedBalances.filter(entry => {
     const matchesPeriod = !selectedPeriod || entry.fiscal_period_id === selectedPeriod || (entry.entry_type === 'transfer' && !entry.fiscal_period_id);
     const matchesType = typeFilter === 'all' || entry.entry_type === typeFilter;
@@ -590,7 +594,7 @@ export default function Ledger() {
         'Original Amount': entry.amount,
         'Currency': entry.currency_code,
         'Rate': entry.exchange_rate,
-        'Unit Number': unitNumber, // ✅ CRITICAL FOR RE-IMPORT
+        'Unit Number': unitNumber,
         'Account Balance': entry.accountBalance,
         'Global Balance': entry.totalBalance
       };
@@ -856,7 +860,7 @@ export default function Ledger() {
   );
 }
 
-// ... (Rest of components EntryRow and AccountFormModal - Unchanged) ...
+// ... (EntryRow and AccountFormModal remain unchanged below) ...
 interface EntryRowProps {
   entry: LedgerEntry;
   accounts: Account[];
