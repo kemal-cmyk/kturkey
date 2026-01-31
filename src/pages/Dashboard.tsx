@@ -312,6 +312,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-gray-500 font-medium mb-1">My Current Balance</p>
+                {/* ✅ Display with correct currency */}
                 <h2 className={`text-3xl font-bold ${myStats.balance > 0.01 ? 'text-red-600' : 'text-green-600'}`}>
                   {formatCurrency(Math.abs(myStats.balance), myStats.currency)}
                 </h2>
@@ -405,6 +406,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                       <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={2} dataKey="value">
                         {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                       </Pie>
+                      {/* ✅ Tooltip No Symbol */}
                       <Tooltip formatter={(value: number) => formatNumber(value)} />
                       <Legend />
                     </PieChart>
@@ -424,6 +426,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
                       <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={75} />
+                      {/* ✅ Tooltip No Symbol */}
                       <Tooltip formatter={(value: number) => formatNumber(value)} />
                       <Bar dataKey="planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
                       <Bar dataKey="actual" fill="#002561" radius={[0, 4, 4, 0]} />
@@ -493,24 +496,24 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
         </Link>
       </div>
 
-      {/* Financial Overview - ✅ NO CURRENCY SYMBOLS */}
+      {/* Financial Overview - ✅ UPDATED TO USE formatNumber (No Symbol) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
-          value={formatNumber(summary?.total_budget || 0)} // ✅ Used formatNumber
+          value={formatNumber(summary?.total_budget || 0)} // ✅ CHANGED
           icon={<Receipt className="w-5 h-5" />}
           color="bg-[#002561]"
         />
         <StatCard
           title="Total Collected"
-          value={formatNumber(totalCollectedLive)} // ✅ Used formatNumber
+          value={formatNumber(totalCollectedLive)} // ✅ CHANGED
           subtitle="Year to date"
           icon={<TrendingUp className="w-5 h-5" />}
           color="bg-green-600"
         />
         <StatCard
           title="Total Spent"
-          value={formatNumber(totalSpentLive)} // ✅ Used formatNumber
+          value={formatNumber(totalSpentLive)} // ✅ CHANGED
           subtitle={`${summary?.total_budget ? Math.round((totalSpentLive / summary.total_budget) * 100) : 0}% of budget`}
           icon={<TrendingDown className="w-5 h-5" />}
           color="bg-orange-500"
