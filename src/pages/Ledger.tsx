@@ -516,18 +516,13 @@ export default function Ledger() {
     };
   });
 
-  const filteredEntriesWithBalance = entriesWithCalculatedBalances.filter(entry => {
-    const matchesPeriod = !selectedPeriod || entry.fiscal_period_id === selectedPeriod || (entry.entry_type === 'transfer' && !entry.fiscal_period_id);
-    const matchesType = typeFilter === 'all' || entry.entry_type === typeFilter;
-    const matchesSearch =
-      entry.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entry.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entry.vendor_name?.toLowerCase().includes(searchQuery.toLowerCase());
-
-    return matchesPeriod && matchesType && matchesSearch;
+  // ✅ FIX: Calculate Period Totals BEFORE filtering by Type/Search
+  // This ensures the top summary cards always reflect the full fiscal period selected
+  const periodEntriesForSummary = entriesWithCalculatedBalances.filter(entry => {
+    return !selectedPeriod || entry.fiscal_period_id === selectedPeriod;
   });
 
-  const periodTotals = filteredEntriesWithBalance.reduce(
+  const periodTotals = periodEntriesForSummary.reduce(
     (acc, entry) => {
       const amountTry = Number(entry.amount_reporting_try || entry.amount);
       if (entry.entry_type === 'income') {
@@ -539,6 +534,18 @@ export default function Ledger() {
     },
     { income: 0, expense: 0 }
   );
+
+  // Now filter for display in table (Type + Search)
+  const filteredEntriesWithBalance = entriesWithCalculatedBalances.filter(entry => {
+    const matchesPeriod = !selectedPeriod || entry.fiscal_period_id === selectedPeriod || (entry.entry_type === 'transfer' && !entry.fiscal_period_id);
+    const matchesType = typeFilter === 'all' || entry.entry_type === typeFilter;
+    const matchesSearch =
+      entry.category?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      entry.description?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      entry.vendor_name?.toLowerCase().includes(searchQuery.toLowerCase());
+
+    return matchesPeriod && matchesType && matchesSearch;
+  });
 
   const displayEntries = [...filteredEntriesWithBalance].sort((a, b) => {
     const dateA = new Date(a.entry_date).getTime();
@@ -614,11 +621,11 @@ export default function Ledger() {
           )}
           {isAdmin && allEntries.length > 0 && selectedEntries.length === 0 && (
              <button 
-                onClick={handleDeleteAll} 
-                className="flex items-center px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium"
+               onClick={handleDeleteAll} 
+               className="flex items-center px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 text-sm font-medium"
              >
-                <AlertTriangle className="w-4 h-4 mr-2"/>
-                Reset Ledger
+               <AlertTriangle className="w-4 h-4 mr-2"/>
+               Reset Ledger
              </button>
           )}
           <button onClick={() => navigate('/ledger/import')} className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"><Upload className="w-4 h-4 mr-2" />Import from Excel</button>
@@ -626,9 +633,6 @@ export default function Ledger() {
         </div>
       </div>
 
-      {/* ... (Rest of UI - unchanged) ... */}
-      
-      {/* (Abbreviated rendering for brevity - same as original file from here down) */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-gray-900">Accounts</h2>
@@ -691,8 +695,8 @@ export default function Ledger() {
             <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search entries..." className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561]" />
           </div>
           <div className="flex gap-2">
-             <div className="relative"><Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" /><select value={selectedPeriod} onChange={(e) => setSelectedPeriod(e.target.value)} className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] appearance-none bg-white">{fiscalPeriods.map((period) => (<option key={period.id} value={period.id}>{period.name}</option>))}</select><ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" /></div>
-             <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" /><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as typeof typeFilter)} className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] appearance-none bg-white"><option value="all">All Types</option><option value="income">Income</option><option value="expense">Expense</option><option value="transfer">Transfer</option></select><ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" /></div>
+              <div className="relative"><Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" /><select value={selectedPeriod} onChange={(e) => setSelectedPeriod(e.target.value)} className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] appearance-none bg-white">{fiscalPeriods.map((period) => (<option key={period.id} value={period.id}>{period.name}</option>))}</select><ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" /></div>
+              <div className="relative"><Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" /><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as typeof typeFilter)} className="pl-10 pr-8 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#002561] appearance-none bg-white"><option value="all">All Types</option><option value="income">Income</option><option value="expense">Expense</option><option value="transfer">Transfer</option></select><ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" /></div>
           </div>
         </div>
 
@@ -853,8 +857,6 @@ export default function Ledger() {
 }
 
 // ... (Rest of components EntryRow and AccountFormModal - Unchanged) ...
-// (I will include them in the full file copy for safety, but they are identical to before)
-
 interface EntryRowProps {
   entry: LedgerEntry;
   accounts: Account[];
