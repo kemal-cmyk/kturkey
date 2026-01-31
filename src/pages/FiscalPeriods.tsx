@@ -577,7 +577,7 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
   );
 }
 
-// --- UPDATED EXTRA FEE MODAL WITH IMPROVED OVERWRITE LOGIC ---
+// --- UPDATED EXTRA FEE MODAL (Case-Insensitive Overwrite) ---
 function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeModalProps) {
   const [loading, setLoading] = useState(false);
   const [replaceExisting, setReplaceExisting] = useState(false); 
@@ -592,23 +592,23 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
     e.preventDefault();
     if (!formData.amount || !formData.description) return;
     
-    // 1. Check for existing dues first if overwrite is selected
+    // 1. SMART CHECK: Look for existing dues (Case Insensitive)
     if (replaceExisting) {
       setLoading(true);
       const { count } = await supabase
         .from('dues')
         .select('*', { count: 'exact', head: true })
         .eq('fiscal_period_id', activePeriodId)
-        .eq('description', formData.description.trim()); // Trim to avoid mismatch
+        .ilike('description', formData.description.trim()); // ✅ Uses ILIKE for case-insensitive check
 
       setLoading(false);
 
       if (count === 0) {
-        if (!confirm(`⚠️ No existing debts found with the exact title "${formData.description}".\n\nThe "Overwrite" option will have no effect.\n\nDo you want to continue and create NEW debts with this title?`)) {
+        if (!confirm(`⚠️ No existing debts found matching "${formData.description}".\n\nExisting debts might have a different spelling.\n\nDo you want to continue and create NEW debts anyway?`)) {
           return;
         }
       } else {
-        if (!confirm(`⚠️ WARNING: Found ${count} existing debts with title "${formData.description}".\n\nThis will DELETE them (including Paid ones) and create new ones.\n\nProceed?`)) {
+        if (!confirm(`⚠️ FOUND ${count} MATCHING DEBTS.\n\nThis will DELETE all debts titled "${formData.description}" (including Paid ones) and create new ones.\n\nAre you sure?`)) {
           return;
         }
       }
@@ -618,20 +618,20 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
 
     setLoading(true);
     try {
-      // 2. (Optional) Delete Existing - USES SECURE RPC FOR SAFETY
+      // 2. DELETE OLD (Uses the new smart SQL function with case-insensitive matching)
       if (replaceExisting) {
         const { error: deleteError } = await supabase.rpc('admin_force_delete_dues', {
           p_period_id: activePeriodId,
-          p_description: formData.description.trim()
+          p_description: formData.description.trim() // Database will handle case-insensitivity
         });
 
         if (deleteError) {
           console.error("Delete failed:", deleteError);
-          throw new Error("Failed to delete existing dues. Check console for details.");
+          throw new Error("Failed to clean up old dues. Check console.");
         }
       }
 
-      // 3. Get all units
+      // 3. GET UNITS
       const { data: units, error: unitError } = await supabase
         .from('units')
         .select('id')
@@ -640,7 +640,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
       if (unitError) throw unitError;
       if (!units || units.length === 0) throw new Error('No units found');
 
-      // 4. Prepare inserts
+      // 4. PREPARE NEW DUES
       const duesInserts = units.map(unit => ({
         unit_id: unit.id,
         fiscal_period_id: activePeriodId,
@@ -649,22 +649,22 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
         base_amount: Number(formData.amount),
         currency_code: formData.currency_code,
         status: 'pending',
-        description: formData.description.trim() // Trim input
+        description: formData.description.trim()
       }));
 
-      // 5. Batch insert
+      // 5. INSERT
       const { error: insertError } = await supabase
         .from('dues')
         .insert(duesInserts);
 
-      if (insertError) { 
+      if (insertError) {
         if (insertError.code === '23505') {
-          throw new Error('A debt already exists for this exact date/unit. Try checking "Delete existing" or change the date.'); 
+          throw new Error('A debt already exists for this date. Check "Overwrite Mode" or change the date.');
         }
-        throw insertError; 
+        throw insertError;
       }
 
-      alert('Extra fees processed successfully!');
+      alert('Success! Dues have been updated.');
       onSuccess(); 
       onClose();
 
@@ -695,10 +695,9 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
               required 
               value={formData.description} 
               onChange={e => setFormData({...formData, description: e.target.value})} 
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500" 
-              placeholder="e.g., Roof Repair 2024" 
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500"
+              placeholder="e.g., Roof Repair"
             />
-            <p className="text-xs text-gray-500 mt-1">Exact spelling required for Overwrite.</p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -748,7 +747,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
                 className="mt-1 w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500"
               />
               <span className="ml-2 text-sm text-red-800">
-                <strong>Overwrite Mode:</strong> Delete ANY existing fees (even paid ones) that match this Description ("{formData.description || '...'}") before adding new ones.
+                <strong>Overwrite Mode:</strong> Replace ANY existing fees matching this title (Case Insensitive).
               </span>
             </label>
           </div>
