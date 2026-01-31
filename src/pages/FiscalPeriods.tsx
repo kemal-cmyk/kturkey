@@ -577,10 +577,10 @@ function SetDuesModal({ periodId, siteId, defaultCurrency, onClose, onSet }: Set
   );
 }
 
-// --- UPDATED EXTRA FEE MODAL WITH REPLACE OPTION ---
+// --- UPDATED EXTRA FEE MODAL WITH IMPROVED OVERWRITE LOGIC ---
 function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeModalProps) {
   const [loading, setLoading] = useState(false);
-  const [replaceExisting, setReplaceExisting] = useState(false); // ✅ New State
+  const [replaceExisting, setReplaceExisting] = useState(false); 
   const [formData, setFormData] = useState({
     description: '',
     amount: '',
@@ -592,53 +592,49 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
     e.preventDefault();
     if (!formData.amount || !formData.description) return;
     
-    let confirmMessage = `Are you sure you want to add a debt of ${formData.amount} ${formData.currency_code} to ALL units?`;
+    // 1. Check for existing dues first if overwrite is selected
     if (replaceExisting) {
-      confirmMessage = `⚠️ WARNING: You are about to DELETE all existing debts with the title "${formData.description}" (Paid & Unpaid) and create new ones.\n\nAre you sure you want to proceed?`;
-    }
+      setLoading(true);
+      const { count } = await supabase
+        .from('dues')
+        .select('*', { count: 'exact', head: true })
+        .eq('fiscal_period_id', activePeriodId)
+        .eq('description', formData.description.trim()); // Trim to avoid mismatch
 
-    if(!confirm(confirmMessage)) return;
+      setLoading(false);
+
+      if (count === 0) {
+        if (!confirm(`⚠️ No existing debts found with the exact title "${formData.description}".\n\nThe "Overwrite" option will have no effect.\n\nDo you want to continue and create NEW debts with this title?`)) {
+          return;
+        }
+      } else {
+        if (!confirm(`⚠️ WARNING: Found ${count} existing debts with title "${formData.description}".\n\nThis will DELETE them (including Paid ones) and create new ones.\n\nProceed?`)) {
+          return;
+        }
+      }
+    } else {
+      if(!confirm(`Are you sure you want to add a debt of ${formData.amount} ${formData.currency_code} to ALL units?`)) return;
+    }
 
     setLoading(true);
     try {
-      // 1. (Optional) Delete Existing - Safe deletion with unlinking
+      // 2. (Optional) Delete Existing - Safe deletion without unlinking (since columns don't exist)
       if (replaceExisting) {
-        // First, get all dues IDs that match this description
-        const { data: matchingDues, error: fetchError } = await supabase
+        // Just delete directly. If FK exists it will fail, but since we know columns are missing,
+        // we assume no hard FK on payments table (it uses JSONB).
+        const { error: deleteError } = await supabase
           .from('dues')
-          .select('id')
+          .delete()
           .eq('fiscal_period_id', activePeriodId)
-          .eq('description', formData.description);
+          .eq('description', formData.description.trim());
 
-        if (fetchError) throw fetchError;
-
-        if (matchingDues && matchingDues.length > 0) {
-          const dueIds = matchingDues.map(d => d.id);
-
-          // Unlink from payments table
-          await supabase
-            .from('payments')
-            .update({ due_id: null })
-            .in('due_id', dueIds);
-
-          // Unlink from ledger_entries table
-          await supabase
-            .from('ledger_entries')
-            .update({ due_id: null })
-            .in('due_id', dueIds);
-
-          // Now safely delete the dues
-          const { error: deleteError } = await supabase
-            .from('dues')
-            .delete()
-            .eq('fiscal_period_id', activePeriodId)
-            .eq('description', formData.description);
-
-          if (deleteError) throw deleteError;
+        if (deleteError) {
+          console.error("Delete failed:", deleteError);
+          throw new Error("Failed to delete existing dues. They might be linked to other records.");
         }
       }
 
-      // 2. Get all units
+      // 3. Get all units
       const { data: units, error: unitError } = await supabase
         .from('units')
         .select('id')
@@ -647,7 +643,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
       if (unitError) throw unitError;
       if (!units || units.length === 0) throw new Error('No units found');
 
-      // 3. Prepare inserts
+      // 4. Prepare inserts
       const duesInserts = units.map(unit => ({
         unit_id: unit.id,
         fiscal_period_id: activePeriodId,
@@ -656,10 +652,10 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
         base_amount: Number(formData.amount),
         currency_code: formData.currency_code,
         status: 'pending',
-        description: formData.description
+        description: formData.description.trim() // Trim input
       }));
 
-      // 4. Batch insert
+      // 5. Batch insert
       const { error: insertError } = await supabase
         .from('dues')
         .insert(duesInserts);
@@ -705,6 +701,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500" 
               placeholder="e.g., Roof Repair 2024" 
             />
+            <p className="text-xs text-gray-500 mt-1">Exact spelling required for Overwrite.</p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -754,7 +751,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
                 className="mt-1 w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500"
               />
               <span className="ml-2 text-sm text-red-800">
-                <strong>Overwrite Mode:</strong> Delete ANY existing fees (even paid ones) that match this Description ("{formData.description || '... '}") before adding new ones.
+                <strong>Overwrite Mode:</strong> Delete ANY existing fees (even paid ones) that match this Description ("{formData.description || '...'}") before adding new ones.
               </span>
             </label>
           </div>
@@ -803,40 +800,34 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
     } else {
       if (!confirm('Are you sure you want to delete this debt?')) return;
     }
-
-    // Unlink from payments and ledger_entries first
-    await supabase.from('payments').update({ due_id: null }).eq('due_id', id);
-    await supabase.from('ledger_entries').update({ due_id: null }).eq('due_id', id);
-
-    // Now delete the due
+    
+    // Direct delete - Assuming no hard FK on payments based on schema
     const { error } = await supabase.from('dues').delete().eq('id', id);
     if (error) {
-      console.error('Delete error:', error);
-      alert(`Failed to delete: ${error.message}\n\nDetails: ${error.details || 'None'}`);
+       console.error(error);
+       alert(`Failed to delete. It might be linked to other records. Error: ${error.message}`);
     } else {
-      fetchDebts();
+       fetchDebts();
     }
   };
 
-  // ✅ NEW: Delete All Logic (Unrestricted) - Safe Force Delete using RPC
+  // ✅ NEW: Delete All Logic (Unrestricted)
   const handleDeleteAll = async () => {
     if (!confirm('⚠️ DANGER: This will delete ALL debts in this period (both PAID and UNPAID).\n\nUse this only if you need a hard reset of billing data.\n\nAre you sure?')) return;
     if (!confirm('Last Warning: This cannot be undone. Type OK to proceed.')) return;
 
     setLoading(true);
+    // Direct delete all for period
+    const { error } = await supabase
+      .from('dues')
+      .delete()
+      .eq('fiscal_period_id', periodId);
 
-    const { error } = await supabase.rpc('admin_force_delete_dues', {
-      p_period_id: periodId
-    });
-
-    if (error) {
-      console.error('Delete error:', error);
-      alert(`Failed to delete: ${error.message}\n\nDetails: ${error.details || 'None'}`);
-    } else {
-      alert('All debts for this period have been successfully unlinked and deleted. Payment history has been preserved.');
+    if (error) alert(`Failed to delete debts: ${error.message}`);
+    else {
+      alert('All debts for this period have been deleted.');
       fetchDebts();
     }
-
     setLoading(false);
   };
 
