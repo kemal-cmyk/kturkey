@@ -229,10 +229,10 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
     }).format(amount);
   };
 
-  // ✅ 2. NEW: Used for Site Transparency Report (No Symbol, just numbers)
+  // 2. Used for Site Transparency & Admin Overview (No Symbol)
   const formatNumber = (amount: number) => {
     return new Intl.NumberFormat('tr-TR', {
-      style: 'decimal', // Just the number
+      style: 'decimal',
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(amount);
@@ -307,7 +307,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
 
         {/* My Status Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Balance Card - Shows Currency Symbol (Specific to User) */}
+          {/* Balance Card */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
             <div className="flex justify-between items-start">
               <div>
@@ -405,7 +405,6 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                       <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={2} dataKey="value">
                         {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                       </Pie>
-                      {/* ✅ Tooltip No Symbol */}
                       <Tooltip formatter={(value: number) => formatNumber(value)} />
                       <Legend />
                     </PieChart>
@@ -425,7 +424,6 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
                       <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={75} />
-                      {/* ✅ Tooltip No Symbol */}
                       <Tooltip formatter={(value: number) => formatNumber(value)} />
                       <Bar dataKey="planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
                       <Bar dataKey="actual" fill="#002561" radius={[0, 4, 4, 0]} />
@@ -443,7 +441,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
   }
 
   // ==========================================
-  // VIEW 2: ADMIN DASHBOARD
+  // VIEW 2: ADMIN DASHBOARD (Existing + Refined)
   // ==========================================
   const occupancyRate = opsStats.totalUnits > 0 
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
@@ -495,24 +493,24 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
         </Link>
       </div>
 
-      {/* Financial Overview (ADMIN VIEW - Keeping Symbols for now as Admin usually knows correct currency) */}
+      {/* Financial Overview - ✅ NO CURRENCY SYMBOLS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
-          value={formatCurrency(summary?.total_budget || 0)}
+          value={formatNumber(summary?.total_budget || 0)} // ✅ Used formatNumber
           icon={<Receipt className="w-5 h-5" />}
           color="bg-[#002561]"
         />
         <StatCard
           title="Total Collected"
-          value={formatCurrency(totalCollectedLive)} 
+          value={formatNumber(totalCollectedLive)} // ✅ Used formatNumber
           subtitle="Year to date"
           icon={<TrendingUp className="w-5 h-5" />}
           color="bg-green-600"
         />
         <StatCard
           title="Total Spent"
-          value={formatCurrency(totalSpentLive)} 
+          value={formatNumber(totalSpentLive)} // ✅ Used formatNumber
           subtitle={`${summary?.total_budget ? Math.round((totalSpentLive / summary.total_budget) * 100) : 0}% of budget`}
           icon={<TrendingDown className="w-5 h-5" />}
           color="bg-orange-500"
@@ -532,7 +530,8 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={75} />
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                  {/* ✅ Tooltip No Symbol */}
+                  <Tooltip formatter={(value: number) => formatNumber(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
                   <Legend />
                   <Bar dataKey="planned" name="Planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
                   <Bar dataKey="actual" name="Actual" fill="#002561" radius={[0, 4, 4, 0]} />
@@ -554,7 +553,8 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2} dataKey="value">
                     {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                   </Pie>
-                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                  {/* ✅ Tooltip No Symbol */}
+                  <Tooltip formatter={(value: number) => formatNumber(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
                   <Legend layout="vertical" align="right" verticalAlign="middle" />
                 </PieChart>
               </ResponsiveContainer>
@@ -575,7 +575,8 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis dataKey="month" />
                 <YAxis tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
-                <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                {/* ✅ Tooltip No Symbol */}
+                <Tooltip formatter={(value: number) => formatNumber(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
                 <Legend />
                 <Line type="monotone" dataKey="income" name="Income" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981' }} />
                 <Line type="monotone" dataKey="expense" name="Expenses" stroke="#ef4444" strokeWidth={2} dot={{ fill: '#ef4444' }} />
