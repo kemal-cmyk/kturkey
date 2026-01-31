@@ -42,6 +42,7 @@ export default function Dashboard() {
     unitId: '',
     unitNumber: '',
     balance: 0,
+    currency: 'TRY', // ✅ Added currency state
     myOpenTickets: 0
   });
 
@@ -176,25 +177,24 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
           .maybeSingle();
 
         if (myUnit) {
-          // ✅ CORRECT BALANCE CALCULATION LOGIC
-          // Instead of summing payments separately, we calculate unpaid dues directly
-          // This avoids issues with deleted/unlinked payments.
+          // B. Calculate Balance (Using simplified version of Statement Logic)
+          // Get Dues - ✅ Added currency_code to selection
           const { data: myDues } = await supabase
             .from('dues')
-            .select('total_amount, base_amount, paid_amount')
+            .select('total_amount, base_amount, paid_amount, currency_code')
             .eq('unit_id', myUnit.id)
-            .neq('status', 'cancelled'); // Don't count cancelled debts
+            .neq('status', 'cancelled');
           
-          // Calculate remaining debt for each due
           const totalUnpaidDues = myDues?.reduce((sum, d) => {
              const amount = Number(d.total_amount) || Number(d.base_amount) || 0;
              const paid = Number(d.paid_amount) || 0;
              const remaining = amount - paid;
-             return sum + (remaining > 0 ? remaining : 0);
+             // Only add positive remaining amounts
+             return sum + (remaining > 0.01 ? remaining : 0);
           }, 0) || 0;
 
-          // Add any opening balance (legacy debt)
-          const finalBalance = (myUnit.opening_balance || 0) + totalUnpaidDues;
+          // ✅ Detect correct currency (Fallback to site default)
+          const detectedCurrency = myDues?.[0]?.currency_code || currentSite.default_currency || 'TRY';
 
           // Get My Open Tickets
           const { count: myTicketCount } = await supabase
@@ -207,7 +207,8 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
           setMyStats({
             unitId: myUnit.id,
             unitNumber: myUnit.unit_number,
-            balance: finalBalance, // Use the corrected balance
+            balance: (myUnit.opening_balance || 0) + totalUnpaidDues,
+            currency: detectedCurrency, // ✅ Store detected currency
             myOpenTickets: myTicketCount || 0
           });
         }
@@ -220,10 +221,13 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
     }
   };
 
-  const formatCurrency = (amount: number) => {
+  // ✅ Updated formatCurrency to accept dynamic currency
+  const formatCurrency = (amount: number, currency: string | undefined = undefined) => {
+    // Use passed currency, or site default, or 'TRY' as last resort
+    const code = currency || currentSite?.default_currency || 'TRY';
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
-      currency: 'TRY',
+      currency: code,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(amount);
@@ -303,8 +307,9 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-gray-500 font-medium mb-1">My Current Balance</p>
+                {/* ✅ Display with correct currency */}
                 <h2 className={`text-3xl font-bold ${myStats.balance > 0.01 ? 'text-red-600' : 'text-green-600'}`}>
-                  {formatCurrency(Math.abs(myStats.balance))}
+                  {formatCurrency(Math.abs(myStats.balance), myStats.currency)}
                 </h2>
                 <p className="text-sm mt-1 text-gray-400">
                   {myStats.balance > 0.01 ? 'Payment Required' : 'Account in Good Standing'}
