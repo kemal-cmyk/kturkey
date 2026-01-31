@@ -42,7 +42,7 @@ export default function Dashboard() {
     unitId: '',
     unitNumber: '',
     balance: 0,
-    currency: 'TRY', // ✅ Added currency state
+    currency: 'TRY',
     myOpenTickets: 0
   });
 
@@ -177,8 +177,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
           .maybeSingle();
 
         if (myUnit) {
-          // B. Calculate Balance (Using simplified version of Statement Logic)
-          // Get Dues - ✅ Added currency_code to selection
+          // B. Calculate Balance
           const { data: myDues } = await supabase
             .from('dues')
             .select('total_amount, base_amount, paid_amount, currency_code')
@@ -189,11 +188,9 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
              const amount = Number(d.total_amount) || Number(d.base_amount) || 0;
              const paid = Number(d.paid_amount) || 0;
              const remaining = amount - paid;
-             // Only add positive remaining amounts
              return sum + (remaining > 0.01 ? remaining : 0);
           }, 0) || 0;
 
-          // ✅ Detect correct currency (Fallback to site default)
           const detectedCurrency = myDues?.[0]?.currency_code || currentSite.default_currency || 'TRY';
 
           // Get My Open Tickets
@@ -208,7 +205,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
             unitId: myUnit.id,
             unitNumber: myUnit.unit_number,
             balance: (myUnit.opening_balance || 0) + totalUnpaidDues,
-            currency: detectedCurrency, // ✅ Store detected currency
+            currency: detectedCurrency, 
             myOpenTickets: myTicketCount || 0
           });
         }
@@ -221,13 +218,21 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
     }
   };
 
-  // ✅ Updated formatCurrency to accept dynamic currency
+  // 1. Used for Debt Alerts and My Balance (Shows Symbol)
   const formatCurrency = (amount: number, currency: string | undefined = undefined) => {
-    // Use passed currency, or site default, or 'TRY' as last resort
     const code = currency || currentSite?.default_currency || 'TRY';
     return new Intl.NumberFormat('tr-TR', {
       style: 'currency',
       currency: code,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  };
+
+  // ✅ 2. NEW: Used for Site Transparency Report (No Symbol, just numbers)
+  const formatNumber = (amount: number) => {
+    return new Intl.NumberFormat('tr-TR', {
+      style: 'decimal', // Just the number
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(amount);
@@ -302,12 +307,11 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
 
         {/* My Status Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Balance Card */}
+          {/* Balance Card - Shows Currency Symbol (Specific to User) */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-gray-500 font-medium mb-1">My Current Balance</p>
-                {/* ✅ Display with correct currency */}
                 <h2 className={`text-3xl font-bold ${myStats.balance > 0.01 ? 'text-red-600' : 'text-green-600'}`}>
                   {formatCurrency(Math.abs(myStats.balance), myStats.currency)}
                 </h2>
@@ -366,29 +370,26 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
           </div>
         </div>
 
-        {/* Transparency Section (Replaces Old Reports Page) */}
+        {/* Transparency Section - ✅ NO CURRENCY SYMBOLS */}
         <div className="border-t border-gray-200 pt-6">
           <h2 className="text-lg font-bold text-gray-900 mb-4">Site Financial Transparency</h2>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <StatCard 
               title="Total Budget" 
-              // ✅ FIXED: Use Site Default Currency
-              value={formatCurrency(summary?.total_budget || 0, currentSite.default_currency)} 
+              value={formatNumber(summary?.total_budget || 0)} 
               icon={<Receipt className="w-5 h-5" />} 
               color="bg-gray-600" 
             />
             <StatCard 
               title="Collected (YTD)" 
-              // ✅ FIXED: Use Site Default Currency
-              value={formatCurrency(totalCollectedLive, currentSite.default_currency)} 
+              value={formatNumber(totalCollectedLive)} 
               icon={<TrendingUp className="w-5 h-5" />} 
               color="bg-green-600" 
             />
             <StatCard 
               title="Total Spent" 
-              // ✅ FIXED: Use Site Default Currency
-              value={formatCurrency(totalSpentLive, currentSite.default_currency)} 
+              value={formatNumber(totalSpentLive)} 
               icon={<TrendingDown className="w-5 h-5" />} 
               color="bg-orange-500" 
             />
@@ -404,8 +405,8 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                       <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={90} paddingAngle={2} dataKey="value">
                         {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                       </Pie>
-                      {/* ✅ FIXED: Use Site Default Currency */}
-                      <Tooltip formatter={(value: number) => formatCurrency(value, currentSite.default_currency)} />
+                      {/* ✅ Tooltip No Symbol */}
+                      <Tooltip formatter={(value: number) => formatNumber(value)} />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
@@ -424,8 +425,8 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                       <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                       <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
                       <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} width={75} />
-                      {/* ✅ FIXED: Use Site Default Currency */}
-                      <Tooltip formatter={(value: number) => formatCurrency(value, currentSite.default_currency)} />
+                      {/* ✅ Tooltip No Symbol */}
+                      <Tooltip formatter={(value: number) => formatNumber(value)} />
                       <Bar dataKey="planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
                       <Bar dataKey="actual" fill="#002561" radius={[0, 4, 4, 0]} />
                     </BarChart>
@@ -442,7 +443,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
   }
 
   // ==========================================
-  // VIEW 2: ADMIN DASHBOARD (Existing + Refined)
+  // VIEW 2: ADMIN DASHBOARD
   // ==========================================
   const occupancyRate = opsStats.totalUnits > 0 
     ? Math.round((opsStats.occupiedUnits / opsStats.totalUnits) * 100) 
@@ -494,27 +495,24 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
         </Link>
       </div>
 
-      {/* Financial Overview */}
+      {/* Financial Overview (ADMIN VIEW - Keeping Symbols for now as Admin usually knows correct currency) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
           title="Total Budget"
-          // ✅ FIXED: Use Site Default Currency
-          value={formatCurrency(summary?.total_budget || 0, currentSite.default_currency)}
+          value={formatCurrency(summary?.total_budget || 0)}
           icon={<Receipt className="w-5 h-5" />}
           color="bg-[#002561]"
         />
         <StatCard
           title="Total Collected"
-          // ✅ FIXED: Use Site Default Currency
-          value={formatCurrency(totalCollectedLive, currentSite.default_currency)} 
+          value={formatCurrency(totalCollectedLive)} 
           subtitle="Year to date"
           icon={<TrendingUp className="w-5 h-5" />}
           color="bg-green-600"
         />
         <StatCard
           title="Total Spent"
-          // ✅ FIXED: Use Site Default Currency
-          value={formatCurrency(totalSpentLive, currentSite.default_currency)} 
+          value={formatCurrency(totalSpentLive)} 
           subtitle={`${summary?.total_budget ? Math.round((totalSpentLive / summary.total_budget) * 100) : 0}% of budget`}
           icon={<TrendingDown className="w-5 h-5" />}
           color="bg-orange-500"
@@ -534,8 +532,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis type="number" tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 12 }} width={75} />
-                  {/* ✅ FIXED: Use Site Default Currency */}
-                  <Tooltip formatter={(value: number) => formatCurrency(value, currentSite.default_currency)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
                   <Legend />
                   <Bar dataKey="planned" name="Planned" fill="#cbd5e1" radius={[0, 4, 4, 0]} />
                   <Bar dataKey="actual" name="Actual" fill="#002561" radius={[0, 4, 4, 0]} />
@@ -557,8 +554,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                   <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={2} dataKey="value">
                     {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                   </Pie>
-                  {/* ✅ FIXED: Use Site Default Currency */}
-                  <Tooltip formatter={(value: number) => formatCurrency(value, currentSite.default_currency)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                  <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
                   <Legend layout="vertical" align="right" verticalAlign="middle" />
                 </PieChart>
               </ResponsiveContainer>
@@ -579,8 +575,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis dataKey="month" />
                 <YAxis tickFormatter={(v) => `${(v/1000).toFixed(0)}K`} />
-                {/* ✅ FIXED: Use Site Default Currency */}
-                <Tooltip formatter={(value: number) => formatCurrency(value, currentSite.default_currency)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
+                <Tooltip formatter={(value: number) => formatCurrency(value)} contentStyle={{ borderRadius: 8, border: '1px solid #e5e7eb' }} />
                 <Legend />
                 <Line type="monotone" dataKey="income" name="Income" stroke="#10b981" strokeWidth={2} dot={{ fill: '#10b981' }} />
                 <Line type="monotone" dataKey="expense" name="Expenses" stroke="#ef4444" strokeWidth={2} dot={{ fill: '#ef4444' }} />
