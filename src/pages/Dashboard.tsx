@@ -176,23 +176,25 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
           .maybeSingle();
 
         if (myUnit) {
-          // B. Calculate Balance (Using simplified version of Statement Logic)
-          // Get Dues
+          // ✅ CORRECT BALANCE CALCULATION LOGIC
+          // Instead of summing payments separately, we calculate unpaid dues directly
+          // This avoids issues with deleted/unlinked payments.
           const { data: myDues } = await supabase
             .from('dues')
-            .select('total_amount, base_amount')
+            .select('total_amount, base_amount, paid_amount')
             .eq('unit_id', myUnit.id)
-            .neq('status', 'cancelled');
+            .neq('status', 'cancelled'); // Don't count cancelled debts
           
-          const totalDues = myDues?.reduce((sum, d) => sum + (Number(d.total_amount) || Number(d.base_amount) || 0), 0) || 0;
+          // Calculate remaining debt for each due
+          const totalUnpaidDues = myDues?.reduce((sum, d) => {
+             const amount = Number(d.total_amount) || Number(d.base_amount) || 0;
+             const paid = Number(d.paid_amount) || 0;
+             const remaining = amount - paid;
+             return sum + (remaining > 0 ? remaining : 0);
+          }, 0) || 0;
 
-          // Get Payments
-          const { data: myPayments } = await supabase
-            .from('payments')
-            .select('amount')
-            .eq('unit_id', myUnit.id);
-          
-          const totalPaid = myPayments?.reduce((sum, p) => sum + Number(p.amount), 0) || 0;
+          // Add any opening balance (legacy debt)
+          const finalBalance = (myUnit.opening_balance || 0) + totalUnpaidDues;
 
           // Get My Open Tickets
           const { count: myTicketCount } = await supabase
@@ -205,7 +207,7 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
           setMyStats({
             unitId: myUnit.id,
             unitNumber: myUnit.unit_number,
-            balance: (myUnit.opening_balance || 0) + totalDues - totalPaid,
+            balance: finalBalance, // Use the corrected balance
             myOpenTickets: myTicketCount || 0
           });
         }
@@ -301,14 +303,14 @@ const isHomeowner = currentRole && !isAdmin && !isBoardMember;
             <div className="flex justify-between items-start">
               <div>
                 <p className="text-gray-500 font-medium mb-1">My Current Balance</p>
-                <h2 className={`text-3xl font-bold ${myStats.balance > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                <h2 className={`text-3xl font-bold ${myStats.balance > 0.01 ? 'text-red-600' : 'text-green-600'}`}>
                   {formatCurrency(Math.abs(myStats.balance))}
                 </h2>
                 <p className="text-sm mt-1 text-gray-400">
-                  {myStats.balance > 0 ? 'Payment Required' : 'Account in Good Standing'}
+                  {myStats.balance > 0.01 ? 'Payment Required' : 'Account in Good Standing'}
                 </p>
               </div>
-              <div className={`p-3 rounded-lg ${myStats.balance > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+              <div className={`p-3 rounded-lg ${myStats.balance > 0.01 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
                 <Wallet className="w-6 h-6" />
               </div>
             </div>
