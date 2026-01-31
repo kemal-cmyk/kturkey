@@ -618,7 +618,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
 
     setLoading(true);
     try {
-      // 2. (Optional) Delete Existing - Safe deletion using RPC function
+      // 2. (Optional) Delete Existing - USES SECURE RPC FOR SAFETY
       if (replaceExisting) {
         const { error: deleteError } = await supabase.rpc('admin_force_delete_dues', {
           p_period_id: activePeriodId,
@@ -627,7 +627,7 @@ function ExtraFeeModal({ siteId, activePeriodId, onClose, onSuccess }: ExtraFeeM
 
         if (deleteError) {
           console.error("Delete failed:", deleteError);
-          throw new Error("Failed to delete existing dues. They might be linked to other records.");
+          throw new Error("Failed to delete existing dues. Check console for details.");
         }
       }
 
@@ -791,60 +791,40 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
     setLoading(false);
   };
 
-  const handleDelete = async (id: string, description: string, isPaid: boolean) => {
+  const handleDelete = async (id: string, isPaid: boolean) => {
     if (isPaid) {
       if (!confirm('⚠️ WARNING: This debt is marked as PAID or PARTIALLY PAID.\n\nDeleting it will NOT refund the payment, but it will remove the debt record.\n\nAre you absolutely sure you want to delete it?')) return;
     } else {
       if (!confirm('Are you sure you want to delete this debt?')) return;
     }
-
-    // Get the period ID and description to use RPC function
-    const { data: dueData } = await supabase
-      .from('dues')
-      .select('fiscal_period_id, description')
-      .eq('id', id)
-      .single();
-
-    if (!dueData) {
-      alert('Failed to find debt record.');
-      return;
-    }
-
-    // Use RPC to safely delete with unlinking
-    const { error } = await supabase.rpc('admin_force_delete_dues', {
-      p_period_id: dueData.fiscal_period_id,
-      p_description: dueData.description || description
-    });
-
+    
+    // Direct delete - Assuming no hard FK on payments based on schema
+    const { error } = await supabase.from('dues').delete().eq('id', id);
     if (error) {
        console.error(error);
-       alert(`Failed to delete. Error: ${error.message}`);
+       alert(`Failed to delete. It might be linked to other records. Error: ${error.message}`);
     } else {
        fetchDebts();
     }
   };
 
-  // ✅ NEW: Delete All Logic (Unrestricted) - Using safe RPC function
+  // ✅ NEW: Delete All Logic (Unrestricted)
   const handleDeleteAll = async () => {
     if (!confirm('⚠️ DANGER: This will delete ALL debts in this period (both PAID and UNPAID).\n\nUse this only if you need a hard reset of billing data.\n\nAre you sure?')) return;
     if (!confirm('Last Warning: This cannot be undone. Type OK to proceed.')) return;
 
     setLoading(true);
+    // Direct delete all for period
+    const { error } = await supabase
+      .from('dues')
+      .delete()
+      .eq('fiscal_period_id', periodId);
 
-    // Use RPC to safely delete all dues with unlinking
-    const { error } = await supabase.rpc('admin_force_delete_dues', {
-      p_period_id: periodId,
-      p_description: null // null means delete ALL dues in the period
-    });
-
-    if (error) {
-      console.error('Delete error:', error);
-      alert(`Failed to delete debts: ${error.message}`);
-    } else {
-      alert('All debts for this period have been successfully deleted. Payment history has been preserved.');
+    if (error) alert(`Failed to delete debts: ${error.message}`);
+    else {
+      alert('All debts for this period have been deleted.');
       fetchDebts();
     }
-
     setLoading(false);
   };
 
@@ -904,7 +884,7 @@ function ManageDuesModal({ periodId, siteId, onClose }: ManageDuesModalProps) {
                   </td>
                   <td className="px-6 py-3 text-center">
                     {/* ✅ DELETE INDIVIDUAL (Unrestricted) */}
-                    <button onClick={() => handleDelete(d.id, d.description || 'Monthly Due', d.paid_amount > 0)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title={d.paid_amount > 0 ? "Warning: Paid" : "Delete"}>
+                    <button onClick={() => handleDelete(d.id, d.paid_amount > 0)} className="text-red-500 hover:text-red-700 p-1 rounded hover:bg-red-50" title={d.paid_amount > 0 ? "Warning: Paid" : "Delete"}>
                       <Trash2 className="w-4 h-4"/>
                     </button>
                   </td>
